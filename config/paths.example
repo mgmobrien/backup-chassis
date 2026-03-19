@@ -1,0 +1,6 @@
+# One absolute path per line.
+# The backup runner reads this file instead of embedding machine-specific
+# paths in the chassis code.
+
+$HOME/Documents
+$HOME/Desktop

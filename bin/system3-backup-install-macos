@@ -1,0 +1,319 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/system3-backup"
+STATE_DIR="$HOME/.local/state/system3-backup"
+LOG_DIR="$HOME/.local/var/log/system3-backup"
+DASHBOARD_DIR="$HOME/.local/share/system3-backup"
+DASHBOARD_OUTPUT="$DASHBOARD_DIR/index.html"
+LAUNCH_AGENT_PATH="$HOME/Library/LaunchAgents/com.system3.backup.plist"
+SWIFTBAR_PLUGIN_PATH="$HOME/Library/Application Support/SwiftBar/Plugins/system3-backup.5m.sh"
+SERVICE_LABEL="com.system3.backup"
+DISPLAY_NAME="System 3 Backup"
+SCHEDULE_INTERVAL_SECONDS="14400"
+FORCE="0"
+
+usage() {
+    cat <<EOF
+Usage: system3-backup-install-macos [options]
+
+Creates a machine-local bootstrap surface for System 3 Backup on macOS.
+
+Options:
+  --config-home PATH                 Config directory (default: $CONFIG_HOME)
+  --state-dir PATH                   State/status directory (default: $STATE_DIR)
+  --log-dir PATH                     Log directory (default: $LOG_DIR)
+  --dashboard-dir PATH               Dashboard directory (default: $DASHBOARD_DIR)
+  --dashboard-output PATH            Dashboard HTML output path
+  --launch-agent-path PATH           launchd plist output path
+  --swiftbar-plugin-path PATH        SwiftBar plugin output path
+  --service-label LABEL              launchd service label
+  --display-name NAME                Human-facing display name
+  --schedule-interval-seconds N      launchd StartInterval value (default: $SCHEDULE_INTERVAL_SECONDS)
+  --force                            Overwrite existing generated files
+  -h, --help                         Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --config-home)
+            CONFIG_HOME="$2"
+            shift 2
+            ;;
+        --state-dir)
+            STATE_DIR="$2"
+            shift 2
+            ;;
+        --log-dir)
+            LOG_DIR="$2"
+            shift 2
+            ;;
+        --dashboard-dir)
+            DASHBOARD_DIR="$2"
+            DASHBOARD_OUTPUT="$DASHBOARD_DIR/index.html"
+            shift 2
+            ;;
+        --dashboard-output)
+            DASHBOARD_OUTPUT="$2"
+            DASHBOARD_DIR="$(dirname "$DASHBOARD_OUTPUT")"
+            shift 2
+            ;;
+        --launch-agent-path)
+            LAUNCH_AGENT_PATH="$2"
+            shift 2
+            ;;
+        --swiftbar-plugin-path)
+            SWIFTBAR_PLUGIN_PATH="$2"
+            shift 2
+            ;;
+        --service-label)
+            SERVICE_LABEL="$2"
+            shift 2
+            ;;
+        --display-name)
+            DISPLAY_NAME="$2"
+            shift 2
+            ;;
+        --schedule-interval-seconds)
+            SCHEDULE_INTERVAL_SECONDS="$2"
+            shift 2
+            ;;
+        --force)
+            FORCE="1"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+resolve_path() {
+    python3 - "$1" <<'PY'
+import os
+import sys
+
+print(os.path.abspath(os.path.expanduser(sys.argv[1])))
+PY
+}
+
+echo "check prerequisites"
+"$REPO_ROOT/bin/system3-backup-doctor"
+
+if ! [[ "$SCHEDULE_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || [[ "$SCHEDULE_INTERVAL_SECONDS" -le 0 ]]; then
+    echo "schedule interval must be a positive integer: $SCHEDULE_INTERVAL_SECONDS" >&2
+    exit 2
+fi
+
+CONFIG_HOME="$(resolve_path "$CONFIG_HOME")"
+STATE_DIR="$(resolve_path "$STATE_DIR")"
+LOG_DIR="$(resolve_path "$LOG_DIR")"
+DASHBOARD_DIR="$(resolve_path "$DASHBOARD_DIR")"
+DASHBOARD_OUTPUT="$(resolve_path "$DASHBOARD_OUTPUT")"
+LAUNCH_AGENT_PATH="$(resolve_path "$LAUNCH_AGENT_PATH")"
+SWIFTBAR_PLUGIN_PATH="$(resolve_path "$SWIFTBAR_PLUGIN_PATH")"
+
+ENV_FILE="$CONFIG_HOME/system3-backup.env"
+PATHS_FILE="$CONFIG_HOME/paths.txt"
+EXCLUDES_FILE="$CONFIG_HOME/excludes.txt"
+CANARY_FILE="$CONFIG_HOME/restore-canary-do-not-edit.txt"
+MACHINE_STATE_DIR="$CONFIG_HOME/machine-state"
+
+mkdir -p \
+    "$CONFIG_HOME" \
+    "$STATE_DIR" \
+    "$LOG_DIR" \
+    "$DASHBOARD_DIR" \
+    "$(dirname "$LAUNCH_AGENT_PATH")" \
+    "$(dirname "$SWIFTBAR_PLUGIN_PATH")"
+
+write_file_if_allowed() {
+    local target="$1"
+    local mode="$2"
+
+    if [[ -e "$target" && "$FORCE" != "1" ]]; then
+        echo "skip  $target"
+        return 0
+    fi
+
+    cat > "$target"
+    chmod "$mode" "$target"
+    echo "write $target"
+}
+
+copy_file_if_allowed() {
+    local source_path="$1"
+    local target="$2"
+    local mode="$3"
+
+    if [[ -e "$target" && "$FORCE" != "1" ]]; then
+        echo "skip  $target"
+        return 0
+    fi
+
+    cp "$source_path" "$target"
+    chmod "$mode" "$target"
+    echo "write $target"
+}
+
+write_file_if_allowed "$ENV_FILE" 0644 <<EOF
+# Machine-local environment for System 3 Backup
+#
+# Fill in the repository target and credentials before loading the launch agent.
+
+# restic repository target
+RESTIC_REPOSITORY="s3:s3.us-west-000.backblazeb2.com/example-bucket"
+
+# Storage credentials
+AWS_ACCESS_KEY_ID="example-key-id"
+AWS_SECRET_ACCESS_KEY="example-secret-key"
+
+# Encryption passphrase
+RESTIC_PASSWORD="replace-me"
+
+# Optional heartbeat monitor
+HEALTHCHECKS_PING_URL="https://hc-ping.example/uuid"
+SYSTEM3_BACKUP_HEALTHCHECKS_CHECK_URL=""
+
+# Local status paths
+SYSTEM3_BACKUP_STATE_DIR="$STATE_DIR"
+SYSTEM3_BACKUP_LOG_DIR="$LOG_DIR"
+SYSTEM3_BACKUP_STATUS_DIR="$STATE_DIR"
+
+# Local config files
+SYSTEM3_BACKUP_PATHS_FILE="$PATHS_FILE"
+SYSTEM3_BACKUP_EXCLUDES_FILE="$EXCLUDES_FILE"
+SYSTEM3_BACKUP_CANARY_FILE="$CANARY_FILE"
+
+# Scheduling and retention
+SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS="$SCHEDULE_INTERVAL_SECONDS"
+SYSTEM3_BACKUP_FAIL_ALERT_THRESHOLD="3"
+SYSTEM3_BACKUP_NETWORK_CHECK_URL=""
+SYSTEM3_BACKUP_KEEP_DAILY="7"
+SYSTEM3_BACKUP_KEEP_WEEKLY="4"
+SYSTEM3_BACKUP_KEEP_MONTHLY="12"
+SYSTEM3_BACKUP_LOG_RETENTION_DAYS="30"
+SYSTEM3_BACKUP_ALLOW_MISSING_PATHS="0"
+SYSTEM3_BACKUP_USE_CAFFEINATE="1"
+SYSTEM3_BACKUP_DUMP_BREWFILE="0"
+SYSTEM3_BACKUP_MACHINE_STATE_DIR="$MACHINE_STATE_DIR"
+SYSTEM3_BACKUP_ENABLE_MACOS_NOTIFICATIONS="0"
+
+# UI and display
+SYSTEM3_BACKUP_DASHBOARD_DIR="$DASHBOARD_DIR"
+SYSTEM3_BACKUP_DASHBOARD_OUTPUT="$DASHBOARD_OUTPUT"
+SYSTEM3_BACKUP_DASHBOARD_ENTRYPOINT="$REPO_ROOT/bin/system3-backup-dashboard"
+SYSTEM3_BACKUP_DISPLAY_NAME="$DISPLAY_NAME"
+SYSTEM3_BACKUP_STORAGE_LABEL="\$RESTIC_REPOSITORY"
+SYSTEM3_BACKUP_STORAGE_URL=""
+SYSTEM3_BACKUP_SCHEDULER_LABEL="launchd"
+SYSTEM3_BACKUP_SCHEDULE_LABEL="Every 4h"
+SYSTEM3_BACKUP_SCHEDULER_SERVICE="$SERVICE_LABEL"
+SYSTEM3_BACKUP_SCHEDULER_PLIST="$LAUNCH_AGENT_PATH"
+SYSTEM3_BACKUP_MONITOR_LABEL="healthchecks.io"
+SYSTEM3_BACKUP_ENCRYPTION_LABEL="restic repository encryption"
+SYSTEM3_BACKUP_CREDENTIALS_LABEL="local machine credentials"
+SYSTEM3_BACKUP_RUNTIME_ENTRYPOINT="$REPO_ROOT/bin/system3-backup-backup"
+SYSTEM3_BACKUP_VERIFY_SCRIPT="$REPO_ROOT/bin/system3-backup-verify"
+SYSTEM3_BACKUP_VERIFY_PROCESS_MATCH="system3-backup-verify"
+
+# Verification tuning
+SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH="\$HOME/Documents"
+SYSTEM3_BACKUP_CHECK_SUBSET="1/16"
+SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS="7"
+SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS="30"
+EOF
+
+copy_file_if_allowed "$REPO_ROOT/config/paths.example" "$PATHS_FILE" 0644
+copy_file_if_allowed "$REPO_ROOT/config/excludes.example" "$EXCLUDES_FILE" 0644
+
+write_file_if_allowed "$LAUNCH_AGENT_PATH" 0644 <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$SERVICE_LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$REPO_ROOT/bin/system3-backup-backup</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>$SCHEDULE_INTERVAL_SECONDS</integer>
+    <key>StandardOutPath</key>
+    <string>$LOG_DIR/launchd-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>$LOG_DIR/launchd-stderr.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>SYSTEM3_BACKUP_ENV_FILE</key>
+        <string>$ENV_FILE</string>
+    </dict>
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
+EOF
+
+write_file_if_allowed "$SWIFTBAR_PLUGIN_PATH" 0755 <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+export SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE"
+exec "$REPO_ROOT/bin/system3-backup-swiftbar" "\$@"
+EOF
+
+validate_generated_surface() {
+    echo "validate $LAUNCH_AGENT_PATH"
+    plutil -lint "$LAUNCH_AGENT_PATH" >/dev/null
+
+    echo "validate $SWIFTBAR_PLUGIN_PATH"
+    bash -n "$SWIFTBAR_PLUGIN_PATH"
+
+    echo "validate $ENV_FILE"
+    SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-backup" --check-config >/dev/null
+}
+
+validate_generated_surface
+
+cat <<EOF
+
+Bootstrap surface ready.
+
+Created or preserved:
+- env: $ENV_FILE
+- paths: $PATHS_FILE
+- excludes: $EXCLUDES_FILE
+- launchd plist: $LAUNCH_AGENT_PATH
+- SwiftBar plugin: $SWIFTBAR_PLUGIN_PATH
+
+Validated automatically:
+- plist syntax
+- SwiftBar wrapper shell syntax
+- generated env / config coherence via --check-config
+
+Next steps:
+1. Edit $ENV_FILE with your restic repository, credentials, and labels.
+2. Edit $PATHS_FILE with the directories you actually want backed up.
+3. Run: SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-backup" --check-config
+4. Validate the generated plist: plutil -lint "$LAUNCH_AGENT_PATH"
+5. Load the scheduler: launchctl load "$LAUNCH_AGENT_PATH"
+EOF

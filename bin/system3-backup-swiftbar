@@ -1,0 +1,677 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/system3-backup-env.sh"
+system3_backup_load_env
+
+STATUS_FILE="$SYSTEM3_BACKUP_STATUS_FILE"
+SNAP_CACHE="$SYSTEM3_BACKUP_SNAPSHOTS_CACHE_FILE"
+VERIFY_STATUS_FILE="$SYSTEM3_BACKUP_STATUS_DIR/verification-status.json"
+DISPLAY_NAME="$SYSTEM3_BACKUP_DISPLAY_NAME"
+SNAPSHOT_MATCH_PATH="${SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH:-}"
+BACKUP_COMMAND="${SYSTEM3_BACKUP_RUNTIME_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-backup}"
+VERIFY_COMMAND="${SYSTEM3_BACKUP_VERIFY_SCRIPT:-$SCRIPT_DIR/system3-backup-verify}"
+DASHBOARD_COMMAND="${SYSTEM3_BACKUP_DASHBOARD_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-dashboard}"
+DASHBOARD_OUTPUT="${SYSTEM3_BACKUP_DASHBOARD_OUTPUT:-$SYSTEM3_BACKUP_DASHBOARD_DIR/index.html}"
+SCHEDULER_SERVICE="${SYSTEM3_BACKUP_SCHEDULER_SERVICE:-}"
+SCHEDULER_PLIST="${SYSTEM3_BACKUP_SCHEDULER_PLIST:-}"
+HC_DETAILS_URL="${SYSTEM3_BACKUP_HEALTHCHECKS_CHECK_URL:-${HEALTHCHECKS_DETAILS_URL:-}}"
+STORAGE_URL="${SYSTEM3_BACKUP_STORAGE_URL:-}"
+VERIFY_PROCESS_MATCH="${SYSTEM3_BACKUP_VERIFY_PROCESS_MATCH:-}"
+
+if [[ -z "$STORAGE_URL" && "$SYSTEM3_BACKUP_STORAGE_LABEL" == *Backblaze* ]]; then
+    STORAGE_URL="https://secure.backblaze.com/b2_buckets.htm"
+fi
+
+if [[ -z "$SNAPSHOT_MATCH_PATH" && -f "$SYSTEM3_BACKUP_PATHS_FILE" ]]; then
+    SNAPSHOT_MATCH_PATH="$(
+        python3 - "$SYSTEM3_BACKUP_PATHS_FILE" <<'PY'
+import sys
+
+path_file = sys.argv[1]
+try:
+    with open(path_file) as f:
+        for raw in f:
+            line = raw.strip()
+            if line and not line.startswith("#"):
+                print(line)
+                break
+except FileNotFoundError:
+    pass
+PY
+    )"
+fi
+
+match_pid() {
+    local pattern=""
+    local pid=""
+    for pattern in "$@"; do
+        [[ -z "$pattern" ]] && continue
+        pid="$(pgrep -f "$pattern" 2>/dev/null | head -1 || true)"
+        if [[ -n "$pid" ]]; then
+            echo "$pid"
+            return 0
+        fi
+    done
+    return 1
+}
+
+swiftbar_shell_command() {
+    local command="$1"
+    printf "'%s'" "$command"
+}
+
+if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${RESTIC_PASSWORD:-}" ]]; then
+    echo "🔴 No creds"
+    echo "---"
+    echo "Missing credentials in local config or keychain | color=red"
+    exit 0
+fi
+
+CURRENT_STATE=""
+if [[ -f "$STATUS_FILE" ]]; then
+    CURRENT_STATE="$(
+        python3 - "$STATUS_FILE" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+    print(data.get("state", ""))
+except Exception:
+    pass
+PY
+    )"
+fi
+
+RESTIC_PID="$(pgrep -f "restic backup" 2>/dev/null | head -1 || true)"
+UPLOAD_STATE="none"
+if [[ -n "$RESTIC_PID" ]]; then
+    PROC_STAT="$(ps -p "$RESTIC_PID" -o stat= 2>/dev/null || true)"
+    if [[ "$PROC_STAT" == *T* ]]; then
+        UPLOAD_STATE="paused"
+    else
+        UPLOAD_STATE="running"
+    fi
+fi
+
+VERIFY_PID="$(
+    match_pid \
+        "$VERIFY_PROCESS_MATCH" \
+        "$(basename "$VERIFY_COMMAND")" \
+        "system3-backup-verify" \
+        "restback-verify.sh" \
+        || true
+)"
+VERIFY_RUNNING="no"
+if [[ -n "$VERIFY_PID" ]]; then
+    VERIFY_RUNNING="yes"
+fi
+
+ALL_SNAPS=""
+STALE_SNAPS=""
+if [[ -f "$SNAP_CACHE" ]]; then
+    STALE_SNAPS="$(cat "$SNAP_CACHE")"
+    CACHE_AGE=$(( $(date +%s) - $(stat -f %m "$SNAP_CACHE") ))
+    if [[ "$CACHE_AGE" -lt 21600 ]]; then
+        ALL_SNAPS="$STALE_SNAPS"
+    fi
+fi
+
+if [[ -z "$ALL_SNAPS" ]]; then
+    LIVE_SNAPS="$(restic snapshots --json 2>/dev/null || true)"
+    if [[ -n "$LIVE_SNAPS" && "$LIVE_SNAPS" != "[]" ]]; then
+        ALL_SNAPS="$LIVE_SNAPS"
+    elif [[ -n "$STALE_SNAPS" ]]; then
+        ALL_SNAPS="$STALE_SNAPS"
+    fi
+
+    if [[ -n "$ALL_SNAPS" && "$ALL_SNAPS" != "[]" ]]; then
+        echo "$ALL_SNAPS" > "$SNAP_CACHE"
+    fi
+fi
+
+HAS_FULL="no"
+if [[ -n "$ALL_SNAPS" && "$ALL_SNAPS" != "[]" ]]; then
+    HAS_FULL="$(
+        ALL_SNAPS_JSON="$ALL_SNAPS" \
+        SNAPSHOT_MATCH_PATH="$SNAPSHOT_MATCH_PATH" \
+        python3 - <<'PY'
+import json
+import os
+
+match_path = (os.environ.get("SNAPSHOT_MATCH_PATH") or "").rstrip("/")
+raw_json = os.environ.get("ALL_SNAPS_JSON", "")
+
+try:
+    data = json.loads(raw_json)
+except Exception:
+    print("no")
+    raise SystemExit
+
+def snapshot_matches(snapshot):
+    paths = [p.rstrip("/") for p in snapshot.get("paths", [])]
+    if not match_path:
+        return bool(paths)
+    return match_path in paths
+
+print("yes" if any(snapshot_matches(snapshot) for snapshot in data) else "no")
+PY
+    )"
+    HAS_FULL="${HAS_FULL:-no}"
+fi
+
+LAUNCHD_LOADED=1
+if [[ -n "$SCHEDULER_SERVICE" ]]; then
+    if launchctl list 2>/dev/null | grep -Fq "$SCHEDULER_SERVICE"; then
+        LAUNCHD_LOADED=1
+    else
+        LAUNCHD_LOADED=0
+    fi
+fi
+
+LAST_FULL_HOURS=999
+LAST_FULL_AGE="never"
+LAST_FULL_TITLE="none"
+LAST_FULL_SNAPSHOT="none"
+if [[ "$HAS_FULL" == "yes" ]]; then
+    LAST_FULL_INFO="$(
+        ALL_SNAPS_JSON="$ALL_SNAPS" \
+        SNAPSHOT_MATCH_PATH="$SNAPSHOT_MATCH_PATH" \
+        python3 - <<'PY'
+import json
+import os
+from datetime import datetime, timezone
+
+match_path = (os.environ.get("SNAPSHOT_MATCH_PATH") or "").rstrip("/")
+raw_json = os.environ.get("ALL_SNAPS_JSON", "")
+
+try:
+    data = json.loads(raw_json)
+except Exception:
+    raise SystemExit
+
+def parse_time(value):
+    if not value:
+        return None
+    raw = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+def snapshot_matches(snapshot):
+    paths = [p.rstrip("/") for p in snapshot.get("paths", [])]
+    if not match_path:
+        return bool(paths)
+    return match_path in paths
+
+def age_parts(dt):
+    if dt is None:
+        return (999, "never", "none")
+    if dt.tzinfo is not None:
+        now = datetime.now(timezone.utc)
+        diff = now - dt.astimezone(timezone.utc)
+    else:
+        now = datetime.now()
+        diff = now - dt
+    hours = max(0, int(diff.total_seconds() / 3600))
+    if hours < 1:
+        age = f"{max(1, int(diff.total_seconds() / 60))}m ago"
+        title = "now"
+    elif hours < 24:
+        age = f"{hours}h ago"
+        title = f"{hours}h"
+    else:
+        days = max(1, int(hours / 24))
+        age = f"{days}d ago"
+        title = f"{days}d"
+    return (hours, age, title)
+
+candidates = [snapshot for snapshot in data if snapshot_matches(snapshot)]
+candidates.sort(key=lambda snapshot: snapshot.get("time", ""), reverse=True)
+if not candidates:
+    raise SystemExit
+
+latest = candidates[0]
+hours, age, title = age_parts(parse_time(latest.get("time", "")))
+print(hours)
+print(age)
+print(title)
+print(latest.get("short_id", "none"))
+PY
+    )"
+    LAST_FULL_HOURS="$(echo "$LAST_FULL_INFO" | sed -n '1p')"
+    LAST_FULL_AGE="$(echo "$LAST_FULL_INFO" | sed -n '2p')"
+    LAST_FULL_TITLE="$(echo "$LAST_FULL_INFO" | sed -n '3p')"
+    LAST_FULL_SNAPSHOT="$(echo "$LAST_FULL_INFO" | sed -n '4p')"
+fi
+
+VERIFY_HEALTH="missing"
+VERIFY_CHECK_AGE="never"
+VERIFY_RESTORE_AGE="never"
+VERIFY_SUMMARY="No verification record yet"
+VERIFY_DETAIL="Run verification now to create the first recoverability proof."
+if [[ -f "$VERIFY_STATUS_FILE" ]]; then
+    VERIFY_INFO="$(
+        CHECK_INTERVAL_DAYS="$SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS" \
+        RESTORE_INTERVAL_DAYS="$SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS" \
+        python3 - "$VERIFY_STATUS_FILE" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+
+path = sys.argv[1]
+with open(path) as f:
+    data = json.load(f)
+
+check_interval_days = int(os.environ["CHECK_INTERVAL_DAYS"])
+restore_interval_days = int(os.environ["RESTORE_INTERVAL_DAYS"])
+now = datetime.now(timezone.utc)
+
+def parse_time(value):
+    if not value:
+        return None
+    raw = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+def age_label(dt):
+    if not dt:
+        return "never"
+    diff = now - dt.astimezone(timezone.utc)
+    total_seconds = max(0, int(diff.total_seconds()))
+    if total_seconds < 3600:
+        return f"{max(1, total_seconds // 60)}m ago"
+    if total_seconds < 86400:
+        return f"{total_seconds // 3600}h ago"
+    return f"{max(1, total_seconds // 86400)}d ago"
+
+state = data.get("state", "")
+detail = data.get("detail", "") or "Run verification now to create the first recoverability proof."
+check_dt = parse_time(data.get("last_check_ok_at", ""))
+restore_dt = parse_time(data.get("last_restore_ok_at", ""))
+check_age = age_label(check_dt)
+restore_age = age_label(restore_dt)
+check_due = parse_time(data.get("next_check_due_at", "")) or (check_dt + timedelta(days=check_interval_days) if check_dt else None)
+restore_due = parse_time(data.get("next_restore_due_at", "")) or (restore_dt + timedelta(days=restore_interval_days) if restore_dt else None)
+
+health = "missing"
+summary = "No verification record yet"
+summary_detail = detail
+
+if state == "failed":
+    health = "failed"
+    summary = "Verification failed"
+    summary_detail = detail or "The last integrity check or restore drill failed."
+elif state == "running":
+    health = "running"
+    summary = "Verification running"
+    summary_detail = detail or "Recoverability proof is in progress."
+elif check_dt and restore_dt:
+    if (check_due is None or now <= check_due) and (restore_due is None or now <= restore_due):
+        health = "ok"
+        summary = "Recoverability proof current"
+        summary_detail = f"Integrity {check_age} · restore {restore_age}"
+    else:
+        health = "stale"
+        overdue = []
+        if check_due and now > check_due:
+            overdue.append("integrity check overdue")
+        if restore_due and now > restore_due:
+            overdue.append("restore drill overdue")
+        summary = "Verification stale"
+        summary_detail = " · ".join(overdue) if overdue else "Recoverability proof is stale."
+elif check_dt or restore_dt:
+    health = "stale"
+    summary = "Verification incomplete"
+    summary_detail = "Waiting for the first full integrity check and restore drill pair."
+
+print(health)
+print(check_age)
+print(restore_age)
+print(summary)
+print(summary_detail)
+PY
+    )"
+    VERIFY_HEALTH="$(echo "$VERIFY_INFO" | sed -n '1p')"
+    VERIFY_CHECK_AGE="$(echo "$VERIFY_INFO" | sed -n '2p')"
+    VERIFY_RESTORE_AGE="$(echo "$VERIFY_INFO" | sed -n '3p')"
+    VERIFY_SUMMARY="$(echo "$VERIFY_INFO" | sed -n '4p')"
+    VERIFY_DETAIL="$(echo "$VERIFY_INFO" | sed -n '5p')"
+fi
+
+title_gb_from_status() {
+    python3 - "$STATUS_FILE" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+
+print(f"{int(data.get('gb_done', 0))}/{int(data.get('gb_total', 0))}GB")
+PY
+}
+
+# title bar
+
+if [[ "$UPLOAD_STATE" == "paused" && -f "$STATUS_FILE" ]]; then
+    TITLE_GB="$(title_gb_from_status 2>/dev/null || true)"
+    echo "${TITLE_GB:-paused} | sfimage=pause.circle.fill sfcolor=FF9500"
+elif [[ "$UPLOAD_STATE" == "running" && -f "$STATUS_FILE" ]]; then
+    TITLE_GB="$(title_gb_from_status 2>/dev/null || true)"
+    echo "${TITLE_GB:-running} | sfimage=arrow.triangle.2.circlepath sfcolor=007AFF"
+elif [[ "$UPLOAD_STATE" == "paused" ]]; then
+    echo "paused | sfimage=pause.circle.fill sfcolor=FF9500"
+elif [[ "$UPLOAD_STATE" == "running" ]]; then
+    echo "running | sfimage=arrow.triangle.2.circlepath sfcolor=007AFF"
+elif [[ "$VERIFY_RUNNING" == "yes" ]]; then
+    echo "verify | sfimage=checkmark.shield.fill sfcolor=007AFF"
+elif [[ "$LAUNCHD_LOADED" -eq 0 ]]; then
+    echo "pause | sfimage=pause.circle.fill sfcolor=FF9500"
+elif [[ "$CURRENT_STATE" == "maintenance_warning" ]]; then
+    echo "warn | sfimage=exclamationmark.triangle.fill sfcolor=FF9500"
+elif [[ "$CURRENT_STATE" == "waiting_for_network" ]]; then
+    echo "net | sfimage=wifi.slash sfcolor=FF9500"
+elif [[ "$CURRENT_STATE" == "retry_pending" ]]; then
+    echo "retry | sfimage=arrow.clockwise sfcolor=FF9500"
+elif [[ "$HAS_FULL" == "no" ]]; then
+    if [[ "$CURRENT_STATE" == "retry_pending" ]]; then
+        RETRY_PCT="$(
+            python3 - "$STATUS_FILE" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+
+last_progress = data.get("last_progress", "")
+print(last_progress if last_progress else "retry")
+PY
+        )"
+        echo "${RETRY_PCT:-retry} | sfimage=arrow.clockwise sfcolor=FF9500"
+    else
+        echo "none | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
+    fi
+else
+    if [[ "$VERIFY_HEALTH" == "failed" ]]; then
+        echo "fail | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
+    elif [[ "$LAST_FULL_HOURS" -lt 8 && "$VERIFY_HEALTH" == "ok" ]]; then
+        echo "| sfimage=checkmark.circle.fill sfcolor=34C759"
+    elif [[ "$LAST_FULL_HOURS" -lt 8 ]]; then
+        echo "proof | sfimage=exclamationmark.triangle.fill sfcolor=FF9500"
+    elif [[ "$LAST_FULL_HOURS" -lt 24 ]]; then
+        echo "${LAST_FULL_TITLE:-stale} | sfimage=clock.fill sfcolor=FF9500"
+    else
+        echo "${LAST_FULL_TITLE:-old} | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
+    fi
+fi
+
+echo "---"
+echo "${DISPLAY_NAME} | size=13 color=#888"
+echo "---"
+
+# section 1: status
+
+if [[ "$UPLOAD_STATE" != "none" && -f "$STATUS_FILE" ]]; then
+    STATUS_DATA="$(
+        python3 - "$STATUS_FILE" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+
+pct = data.get("pct", 0)
+gb_done = data.get("gb_done", 0)
+gb_total = data.get("gb_total", 0)
+files_done = data.get("files_done", 0)
+total_files = data.get("total_files", 0)
+elapsed = data.get("time", 0)
+gb_remaining = gb_total - gb_done
+filled = int(pct / 5)
+bar = "█" * filled + "░" * (20 - filled)
+if elapsed >= 3600:
+    elapsed_str = f"{int(elapsed // 3600)}h {int((elapsed % 3600) // 60)}m"
+elif elapsed >= 60:
+    elapsed_str = f"{int(elapsed // 60)}m"
+else:
+    elapsed_str = f"{int(elapsed)}s"
+
+print(f"{bar} {pct:.0f}%")
+print(f"{gb_done:.1f} GB of {int(gb_total)} GB processed ({int(gb_remaining)} GB remaining)")
+print(f"{files_done:,} of {total_files:,} files")
+print(elapsed_str)
+PY
+    )"
+
+    if [[ -n "$STATUS_DATA" ]]; then
+        if [[ "$UPLOAD_STATE" == "paused" ]]; then
+            if [[ "$HAS_FULL" == "no" ]]; then
+                echo "First backup paused | color=#FF9500 size=14"
+            else
+                echo "Backup paused | color=#FF9500 size=14"
+            fi
+        else
+            if [[ "$HAS_FULL" == "no" ]]; then
+                echo "First backup running | color=#007AFF size=14"
+            else
+                echo "Backup running | color=#007AFF size=14"
+            fi
+        fi
+        echo "  $(echo "$STATUS_DATA" | sed -n '1p') | font=Menlo size=12"
+        echo "  $(echo "$STATUS_DATA" | sed -n '2p') | size=13"
+        echo "  $(echo "$STATUS_DATA" | sed -n '3p') | size=13"
+        echo "  Elapsed: $(echo "$STATUS_DATA" | sed -n '4p') | size=13 color=#888"
+    else
+        echo "Backup starting... | color=#007AFF size=14"
+    fi
+elif [[ "$UPLOAD_STATE" != "none" ]]; then
+    echo "Backup starting... | color=#007AFF size=14"
+elif [[ "$VERIFY_RUNNING" == "yes" ]]; then
+    echo "Verification running | color=#007AFF size=14"
+    if [[ "$HAS_FULL" == "yes" ]]; then
+        echo "  Last full backup: ${LAST_FULL_AGE} | size=13"
+    fi
+    echo "  ${VERIFY_DETAIL} | size=13"
+elif [[ "$LAUNCHD_LOADED" -eq 0 ]]; then
+    echo "Backups paused | color=#FF9500 size=14"
+elif [[ "$CURRENT_STATE" == "maintenance_warning" ]]; then
+    DETAIL="$(
+        python3 - "$STATUS_FILE" <<'PY'
+import json
+import sys
+from datetime import datetime
+
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+
+failures = data.get("failures", 0)
+next_attempt = data.get("next_attempt", "")
+if next_attempt:
+    try:
+        target = datetime.strptime(next_attempt, "%Y-%m-%dT%H:%M:%S")
+        diff = target - datetime.now()
+        mins = max(0, int(diff.total_seconds() / 60))
+        if mins >= 60:
+            when = f"{mins // 60}h {mins % 60}m"
+        else:
+            when = f"{mins}m"
+        print(f"Next scheduled retry: ~{when}")
+    except Exception:
+        print("Next scheduled retry: scheduled")
+else:
+    print("Next scheduled retry: scheduled")
+print(f"{failures} consecutive failure(s)")
+PY
+    )"
+    echo "Snapshot completed, cleanup warning | color=#FF9500 size=14"
+    if [[ "$HAS_FULL" == "yes" ]]; then
+        echo "  Last full backup: ${LAST_FULL_AGE} | size=13"
+    fi
+    echo "  Retention cleanup failed after snapshot creation | size=13"
+    echo "  $(echo "$DETAIL" | sed -n '1p') | size=13 color=#888"
+    echo "  $(echo "$DETAIL" | sed -n '2p') | size=13 color=#888"
+elif [[ "$CURRENT_STATE" == "waiting_for_network" ]]; then
+    DETAIL="$(
+        python3 - "$STATUS_FILE" <<'PY'
+import json
+import sys
+from datetime import datetime
+
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+
+failures = data.get("failures", 0)
+next_attempt = data.get("next_attempt", "")
+if next_attempt:
+    try:
+        target = datetime.strptime(next_attempt, "%Y-%m-%dT%H:%M:%S")
+        diff = target - datetime.now()
+        mins = max(0, int(diff.total_seconds() / 60))
+        if mins >= 60:
+            when = f"{mins // 60}h {mins % 60}m"
+        else:
+            when = f"{mins}m"
+    except Exception:
+        when = ""
+else:
+    when = ""
+
+if when:
+    print(f"Retrying in ~{when}")
+else:
+    print("Retry scheduled")
+print(f"{failures} consecutive failure(s)")
+PY
+    )"
+    echo "Waiting for network | color=#FF9500 size=14"
+    if [[ "$HAS_FULL" == "yes" ]]; then
+        echo "  Last full backup: ${LAST_FULL_AGE} | size=13"
+    fi
+    echo "  $(echo "$DETAIL" | sed -n '1p') | size=13"
+    echo "  $(echo "$DETAIL" | sed -n '2p') | size=13 color=#888"
+elif [[ "$CURRENT_STATE" == "retry_pending" ]]; then
+    DETAIL="$(
+        python3 - "$STATUS_FILE" <<'PY'
+import json
+import sys
+from datetime import datetime
+
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+
+failures = data.get("failures", 0)
+last_pct = data.get("last_progress", "unknown")
+next_attempt = data.get("next_attempt", "")
+if next_attempt:
+    try:
+        target = datetime.strptime(next_attempt, "%Y-%m-%dT%H:%M:%S")
+        diff = target - datetime.now()
+        mins = max(0, int(diff.total_seconds() / 60))
+        if mins >= 60:
+            when = f"{mins // 60}h {mins % 60}m"
+        else:
+            when = f"{mins}m"
+        print(f"Last attempt reached {last_pct} — retry in ~{when}")
+    except Exception:
+        print(f"Last attempt reached {last_pct} — retry scheduled")
+else:
+    print(f"Last attempt reached {last_pct} — retry scheduled")
+print(f"{failures} consecutive failure(s)")
+PY
+    )"
+    echo "Backup failed, will retry | color=#FF9500 size=14"
+    if [[ "$HAS_FULL" == "yes" ]]; then
+        echo "  Last full backup: ${LAST_FULL_AGE} | size=13"
+    fi
+    echo "  $(echo "$DETAIL" | sed -n '1p') | size=13"
+    echo "  $(echo "$DETAIL" | sed -n '2p') | size=13 color=#888"
+elif [[ "$HAS_FULL" == "no" ]]; then
+    echo "No full backup exists | color=#FF3B30 size=14"
+else
+    if [[ "$VERIFY_HEALTH" == "failed" ]]; then
+        echo "${DISPLAY_NAME} status: verification failed | color=#FF3B30 size=14"
+        echo "  Last full backup: ${LAST_FULL_AGE} | size=13"
+        echo "  ${VERIFY_DETAIL} | size=13"
+    elif [[ "$VERIFY_HEALTH" == "ok" ]]; then
+        echo "${DISPLAY_NAME} status: verified (${LAST_FULL_AGE}) | size=14"
+        echo "  Integrity check: ${VERIFY_CHECK_AGE} | size=13"
+        echo "  Restore drill: ${VERIFY_RESTORE_AGE} | size=13"
+        echo "  Snapshot ${LAST_FULL_SNAPSHOT} | font=Menlo size=12 color=#888"
+    else
+        echo "${DISPLAY_NAME} status: backup fresh, proof stale | color=#FF9500 size=14"
+        echo "  Last full backup: ${LAST_FULL_AGE} | size=13"
+        echo "  Integrity check: ${VERIFY_CHECK_AGE} | size=13"
+        echo "  Restore drill: ${VERIFY_RESTORE_AGE} | size=13"
+        echo "  ${VERIFY_DETAIL} | size=13 color=#888"
+    fi
+fi
+
+echo "---"
+
+# section 2: actions
+
+if [[ "$UPLOAD_STATE" == "running" ]]; then
+    echo "Pause upload | bash=/bin/bash param1=-lc param2='pkill -STOP -f \"restic backup\"' terminal=false refresh=true"
+elif [[ "$UPLOAD_STATE" == "paused" ]]; then
+    echo "Resume upload | bash=/bin/bash param1=-lc param2='pkill -CONT -f \"restic backup\"' terminal=false refresh=true color=#34C759"
+else
+    echo "Run backup now | bash=$BACKUP_COMMAND terminal=true refresh=true"
+fi
+
+echo "---"
+
+if [[ "$UPLOAD_STATE" == "none" ]]; then
+    echo "Run verification now | bash=$VERIFY_COMMAND param1=--force terminal=true refresh=true"
+    echo "---"
+fi
+
+if [[ -n "$SCHEDULER_PLIST" ]]; then
+    if [[ "$LAUNCHD_LOADED" -gt 0 ]]; then
+        PAUSE_CMD="launchctl unload \"$SCHEDULER_PLIST\""
+        echo "Pause schedule | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "$PAUSE_CMD") terminal=false refresh=true"
+    else
+        RESUME_CMD="launchctl load \"$SCHEDULER_PLIST\""
+        echo "Resume schedule | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "$RESUME_CMD") terminal=false refresh=true color=#34C759"
+    fi
+    echo "---"
+fi
+
+# section 3: system info
+
+echo "Destination: ${SYSTEM3_BACKUP_STORAGE_LABEL} | size=13 color=#888"
+echo "Schedule: ${SYSTEM3_BACKUP_SCHEDULE_LABEL} | size=13 color=#888"
+echo "Verification: ${SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS}d integrity + ${SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS}d restore canary | size=13 color=#888"
+echo "Encryption: ${SYSTEM3_BACKUP_ENCRYPTION_LABEL} | size=13 color=#888"
+
+echo "---"
+
+# section 4: links and tools
+
+if [[ -n "$DASHBOARD_COMMAND" && -n "$DASHBOARD_OUTPUT" ]]; then
+    OPEN_DASHBOARD_CMD="\"$DASHBOARD_COMMAND\" && open \"$DASHBOARD_OUTPUT\""
+    echo "Open ${DISPLAY_NAME} dashboard | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "$OPEN_DASHBOARD_CMD") terminal=false refresh=true"
+fi
+
+LATEST_LOG="$(ls -t "$SYSTEM3_BACKUP_LOG_DIR"/backup-*.log 2>/dev/null | head -1 || true)"
+if [[ -n "$LATEST_LOG" ]]; then
+    echo "View latest log | bash=/usr/bin/open param1=$LATEST_LOG terminal=false"
+fi
+
+if [[ -n "$HC_DETAILS_URL" ]]; then
+    echo "Open ${SYSTEM3_BACKUP_MONITOR_LABEL} details | href=${HC_DETAILS_URL}"
+fi
+
+if [[ -n "$STORAGE_URL" ]]; then
+    echo "Open storage console | href=${STORAGE_URL}"
+fi
+
+echo "---"
+echo "Refresh | refresh=true"

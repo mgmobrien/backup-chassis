@@ -1,0 +1,7 @@
+# Example exclusions for System 3 Backup
+.DS_Store
+node_modules
+.git/objects
+__pycache__
+*.pyc
+.Trash

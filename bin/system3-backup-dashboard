@@ -1,0 +1,493 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/system3-backup-env.sh"
+system3_backup_load_env
+
+DASH_DIR="$SYSTEM3_BACKUP_DASHBOARD_DIR"
+OUT="$SYSTEM3_BACKUP_DASHBOARD_OUTPUT"
+STATUS_FILE="$SYSTEM3_BACKUP_STATUS_FILE"
+SNAP_CACHE="$SYSTEM3_BACKUP_SNAPSHOTS_CACHE_FILE"
+VERIFY_STATUS_FILE="$SYSTEM3_BACKUP_STATUS_DIR/verification-status.json"
+HC_DETAILS_URL="${SYSTEM3_BACKUP_HEALTHCHECKS_CHECK_URL:-${HEALTHCHECKS_DETAILS_URL:-}}"
+DISPLAY_NAME="$SYSTEM3_BACKUP_DISPLAY_NAME"
+STORAGE_LABEL="$SYSTEM3_BACKUP_STORAGE_LABEL"
+SCHEDULER_LABEL="$SYSTEM3_BACKUP_SCHEDULER_LABEL"
+SCHEDULE_LABEL="$SYSTEM3_BACKUP_SCHEDULE_LABEL"
+MONITOR_LABEL="$SYSTEM3_BACKUP_MONITOR_LABEL"
+ENCRYPTION_LABEL="$SYSTEM3_BACKUP_ENCRYPTION_LABEL"
+CREDENTIALS_LABEL="$SYSTEM3_BACKUP_CREDENTIALS_LABEL"
+RUNTIME_ENTRYPOINT="${SYSTEM3_BACKUP_RUNTIME_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-backup}"
+
+mkdir -p "$DASH_DIR"
+
+SNAPSHOTS_JSON=""
+STALE_SNAPSHOTS_JSON=""
+if [[ -f "$SNAP_CACHE" ]]; then
+    STALE_SNAPSHOTS_JSON="$(cat "$SNAP_CACHE")"
+    CACHE_AGE=$(( $(date +%s) - $(stat -f %m "$SNAP_CACHE") ))
+    if [[ "$CACHE_AGE" -lt 21600 ]]; then
+        SNAPSHOTS_JSON="$STALE_SNAPSHOTS_JSON"
+    fi
+fi
+if [[ -z "$SNAPSHOTS_JSON" ]]; then
+    LIVE_SNAPSHOTS_JSON="$(restic snapshots --json 2>/dev/null || echo "")"
+    if [[ -n "$LIVE_SNAPSHOTS_JSON" && "$LIVE_SNAPSHOTS_JSON" != "[]" ]]; then
+        SNAPSHOTS_JSON="$LIVE_SNAPSHOTS_JSON"
+    elif [[ -n "$STALE_SNAPSHOTS_JSON" ]]; then
+        SNAPSHOTS_JSON="$STALE_SNAPSHOTS_JSON"
+    else
+        SNAPSHOTS_JSON="[]"
+    fi
+fi
+
+RUNNING_PID="$(pgrep -f "restic backup" 2>/dev/null | head -1 || echo "")"
+
+STATUS_JSON="{}"
+if [[ -f "$STATUS_FILE" ]]; then
+    STATUS_JSON="$(cat "$STATUS_FILE")"
+fi
+
+VERIFY_JSON="{}"
+if [[ -f "$VERIFY_STATUS_FILE" ]]; then
+    VERIFY_JSON="$(cat "$VERIFY_STATUS_FILE")"
+fi
+
+LATEST_LOG="$(ls -t "$SYSTEM3_BACKUP_LOG_DIR"/backup-*.log 2>/dev/null | head -1 || true)"
+LOG_TAIL=""
+if [[ -n "$LATEST_LOG" ]]; then
+    LOG_TAIL="$(tail -15 "$LATEST_LOG" 2>/dev/null | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+fi
+
+PATHS_TEXT=""
+if [[ -f "$SYSTEM3_BACKUP_PATHS_FILE" ]]; then
+    PATHS_TEXT="$(python3 - "$SYSTEM3_BACKUP_PATHS_FILE" <<'PY'
+import os
+import sys
+
+path_file = sys.argv[1]
+items = []
+with open(path_file) as handle:
+    for raw in handle:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        items.append(os.path.expandvars(os.path.expanduser(line)))
+print("\n".join(items))
+PY
+)"
+fi
+
+export SNAPSHOTS_JSON STATUS_JSON VERIFY_JSON RUNNING_PID LOG_TAIL HC_DETAILS_URL
+export DISPLAY_NAME STORAGE_LABEL SCHEDULER_LABEL SCHEDULE_LABEL MONITOR_LABEL
+export ENCRYPTION_LABEL CREDENTIALS_LABEL RUNTIME_ENTRYPOINT PATHS_TEXT
+export SYSTEM3_BACKUP_STATUS_FILE="$STATUS_FILE"
+export SYSTEM3_BACKUP_VERIFY_STATUS_FILE="$VERIFY_STATUS_FILE"
+export SYSTEM3_BACKUP_LOG_DIR
+export SYSTEM3_BACKUP_EXCLUDES_FILE
+export SYSTEM3_BACKUP_CHECK_SUBSET
+export SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS
+export SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS
+export SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH
+
+python3 <<'PYEOF' > "$OUT"
+import html
+import json
+import os
+from datetime import datetime, timedelta
+
+snapshots = json.loads(os.environ.get("SNAPSHOTS_JSON", "[]"))
+status = json.loads(os.environ.get("STATUS_JSON", "{}"))
+verify = json.loads(os.environ.get("VERIFY_JSON", "{}"))
+running_pid = os.environ.get("RUNNING_PID", "")
+log_tail = os.environ.get("LOG_TAIL", "")
+hc_details_url = os.environ.get("HC_DETAILS_URL", "")
+display_name = os.environ.get("DISPLAY_NAME", "System 3 Backup")
+storage_label = os.environ.get("STORAGE_LABEL", "")
+scheduler_label = os.environ.get("SCHEDULER_LABEL", "")
+schedule_label = os.environ.get("SCHEDULE_LABEL", "")
+monitor_label = os.environ.get("MONITOR_LABEL", "")
+encryption_label = os.environ.get("ENCRYPTION_LABEL", "")
+credentials_label = os.environ.get("CREDENTIALS_LABEL", "")
+runtime_entrypoint = os.environ.get("RUNTIME_ENTRYPOINT", "")
+paths_text = os.environ.get("PATHS_TEXT", "")
+status_file = os.environ.get("SYSTEM3_BACKUP_STATUS_FILE", "")
+verify_status_file = os.environ.get("SYSTEM3_BACKUP_VERIFY_STATUS_FILE", "")
+log_dir = os.environ.get("SYSTEM3_BACKUP_LOG_DIR", "")
+excludes_file = os.environ.get("SYSTEM3_BACKUP_EXCLUDES_FILE", "")
+check_subset = os.environ.get("SYSTEM3_BACKUP_CHECK_SUBSET", "1/16")
+check_interval_days = os.environ.get("SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS", "7")
+restore_interval_days = os.environ.get("SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS", "30")
+match_path = os.environ.get("SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH", "")
+
+now = datetime.now()
+
+def parse_time(value):
+    if not value:
+        return None
+    raw = value.replace("Z", "")
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+def age_label(dt):
+    if not dt:
+        return "none"
+    age_h = (now - dt).total_seconds() / 3600
+    if age_h < 1:
+        return f"{max(1, int(age_h * 60))}m ago"
+    if age_h < 24:
+        return f"{int(age_h)}h ago"
+    return f"{max(1, int(age_h / 24))}d ago"
+
+def fmt_next_attempt(value):
+    if not value:
+        return "scheduled"
+    try:
+        nt = datetime.strptime(value[:19], "%Y-%m-%dT%H:%M:%S")
+        diff = nt - now
+        minutes = max(0, int(diff.total_seconds() / 60))
+        if minutes >= 60:
+            return f"in ~{minutes // 60}h {minutes % 60}m"
+        return f"in ~{minutes}m"
+    except Exception:
+        return "scheduled"
+
+snap_data = []
+latest_full = None
+for snap in sorted(snapshots, key=lambda item: item["time"], reverse=True):
+    dt = datetime.strptime(snap["time"][:19], "%Y-%m-%dT%H:%M:%S")
+    summary = snap.get("summary", {})
+    is_full = match_path in snap.get("paths", []) if match_path else True
+    row = {
+        "id": snap["short_id"],
+        "time": dt.strftime("%Y-%m-%d %H:%M"),
+        "age_h": round((now - dt).total_seconds() / 3600, 1),
+        "is_full": is_full,
+        "files": summary.get("total_files_processed", 0),
+        "size_gb": round(summary.get("total_bytes_processed", 0) / 1024**3, 2),
+        "added_mb": round(summary.get("data_added", 0) / 1024**2, 1),
+    }
+    snap_data.append(row)
+    if is_full and latest_full is None:
+        latest_full = row
+
+total_size_gb = latest_full["size_gb"] if latest_full else 0
+total_files = latest_full["files"] if latest_full else 0
+snap_count = len(snapshots)
+
+is_uploading = bool(running_pid) and status.get("state") in ("uploading", "starting")
+upload_pct = status.get("pct", 0)
+upload_gb_done = status.get("gb_done", 0)
+upload_gb_total = status.get("gb_total", 0)
+upload_files_done = status.get("files_done", 0)
+upload_total_files = status.get("total_files", 0)
+upload_elapsed_s = status.get("elapsed_s", status.get("time", 0))
+if isinstance(upload_elapsed_s, str):
+    try:
+        upload_elapsed_s = float(upload_elapsed_s)
+    except ValueError:
+        upload_elapsed_s = 0
+
+if upload_elapsed_s > 3600:
+    elapsed_str = f"{int(upload_elapsed_s // 3600)}h {int((upload_elapsed_s % 3600) // 60)}m"
+elif upload_elapsed_s > 60:
+    elapsed_str = f"{int(upload_elapsed_s // 60)}m"
+else:
+    elapsed_str = f"{int(upload_elapsed_s)}s"
+
+latest_full_age_h = latest_full["age_h"] if latest_full else None
+latest_full_dt = parse_time(status.get("completed_at", "")) or (datetime.strptime(latest_full["time"], "%Y-%m-%d %H:%M") if latest_full else None)
+latest_full_age = age_label(latest_full_dt) if latest_full_dt else "none"
+current_state = status.get("state", "")
+status_failures = status.get("failures", 0)
+status_next_attempt = fmt_next_attempt(status.get("next_attempt", ""))
+
+verify_state = verify.get("state", "")
+verify_detail = verify.get("detail", "")
+verify_check_dt = parse_time(verify.get("last_check_ok_at", ""))
+verify_restore_dt = parse_time(verify.get("last_restore_ok_at", ""))
+verify_check_age = age_label(verify_check_dt)
+verify_restore_age = age_label(verify_restore_dt)
+verify_health = "missing"
+verify_text = "No verification record"
+verify_detail_text = verify_detail or "Run verification now to create the first recoverability proof."
+verify_color = "#FF9500"
+
+if verify_state == "failed":
+    verify_health = "failed"
+    verify_text = "Verification failed"
+    verify_detail_text = verify_detail or "The last integrity check or restore drill failed."
+    verify_color = "#FF3B30"
+elif verify_state == "running":
+    verify_health = "running"
+    verify_text = "Verification running"
+    verify_detail_text = verify_detail or f"{display_name} is proving recoverability right now."
+    verify_color = "#007AFF"
+elif verify_check_dt and verify_restore_dt:
+    check_age_days = (now - verify_check_dt).total_seconds() / 86400
+    restore_age_days = (now - verify_restore_dt).total_seconds() / 86400
+    if check_age_days <= 10 and restore_age_days <= 40:
+        verify_health = "ok"
+        verify_text = "Recoverability verified"
+        verify_detail_text = f"Integrity {verify_check_age} · restore {verify_restore_age}"
+        verify_color = "#34C759"
+    else:
+        verify_health = "stale"
+        overdue = []
+        if check_age_days > 10:
+            overdue.append("integrity check overdue")
+        if restore_age_days > 40:
+            overdue.append("restore drill overdue")
+        verify_text = "Verification stale"
+        verify_detail_text = " · ".join(overdue) if overdue else "Recoverability proof is stale."
+elif verify_check_dt or verify_restore_dt:
+    verify_health = "stale"
+    verify_text = "Verification incomplete"
+    verify_detail_text = "Waiting for the first full integrity check and restore drill pair."
+
+if is_uploading:
+    status_color = "#007AFF"
+    status_text = "Backup running"
+    status_detail = f"{int(upload_pct)}% complete · {elapsed_str} elapsed"
+elif verify_state == "running":
+    status_color = "#007AFF"
+    status_text = "Verification running"
+    status_detail = verify_detail_text
+elif current_state == "maintenance_warning":
+    status_color = "#FF9500"
+    status_text = "Maintenance warning"
+    status_detail = f"Snapshot succeeded, cleanup failed · retry {status_next_attempt}"
+elif current_state == "waiting_for_network":
+    status_color = "#FF9500"
+    status_text = "Waiting for network"
+    status_detail = f"Storage unreachable on last attempt · retry {status_next_attempt}"
+elif current_state == "retry_pending":
+    status_color = "#FF9500"
+    status_text = "Retry pending"
+    last_progress = status.get("last_progress", "")
+    progress_detail = f"last progress {last_progress}" if last_progress else "backup attempt failed"
+    status_detail = f"{progress_detail} · retry {status_next_attempt}"
+elif not latest_full:
+    status_color = "#FF3B30"
+    status_text = "No full backup"
+    status_detail = "No completed primary snapshot exists yet"
+elif verify_health == "failed":
+    status_color = "#FF3B30"
+    status_text = "Verification failed"
+    status_detail = verify_detail_text
+elif latest_full_age_h is not None and latest_full_age_h < 8 and verify_health == "ok":
+    status_color = "#34C759"
+    status_text = "Healthy"
+    status_detail = f"Last full backup {latest_full_age} · {verify_detail_text}"
+elif latest_full_age_h is not None and latest_full_age_h < 8:
+    status_color = "#FF9500"
+    status_text = "Backup fresh, proof stale"
+    status_detail = verify_detail_text
+elif latest_full_age_h is not None and latest_full_age_h < 24:
+    status_color = "#FF9500"
+    status_text = "Backup stale"
+    status_detail = f"Last full backup {latest_full_age}"
+else:
+    status_color = "#FF3B30"
+    status_text = "Backup overdue"
+    status_detail = f"Last full backup {latest_full_age}"
+
+paths_html = "<br>\n  ".join(html.escape(item) for item in paths_text.splitlines() if item.strip())
+
+print(f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(display_name)}</title>
+<script>
+  setInterval(function() {{
+    if (document.body.classList.contains('uploading') || document.body.classList.contains('verifying')) {{
+      fetch(window.location.href + '?t=' + Date.now())
+        .then(r => r.text())
+        .then(html => {{
+          document.open();
+          document.write(html);
+          document.close();
+        }})
+        .catch(() => {{}});
+    }}
+  }}, 30000);
+</script>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #1a1a1a; color: #e0e0e0; padding: 24px; }}
+  h1 {{ font-size: 20px; font-weight: 600; margin-bottom: 4px; }}
+  .subtitle {{ color: #888; font-size: 13px; margin-bottom: 24px; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }}
+  .card {{ background: #252525; border-radius: 12px; padding: 16px; }}
+  .card-label {{ font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #888; margin-bottom: 4px; }}
+  .card-value {{ font-size: 24px; font-weight: 600; }}
+  .card-detail {{ font-size: 12px; color: #888; margin-top: 4px; }}
+  .status-dot {{ display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }}
+  .progress-container {{ background: #333; border-radius: 8px; height: 12px; overflow: hidden; margin: 8px 0; }}
+  .progress-bar {{ height: 100%; border-radius: 8px; transition: width 0.3s; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+  th {{ text-align: left; padding: 8px 12px; color: #888; font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #333; }}
+  td {{ padding: 8px 12px; border-bottom: 1px solid #2a2a2a; }}
+  .full-tag {{ background: #34C759; color: #000; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600; }}
+  .partial-tag {{ background: #555; color: #ccc; font-size: 10px; padding: 2px 6px; border-radius: 4px; }}
+  .mono {{ font-family: 'SF Mono', Menlo, monospace; font-size: 12px; }}
+  .section-title {{ font-size: 14px; font-weight: 600; margin: 24px 0 12px 0; }}
+  .config-row {{ display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid #2a2a2a; font-size: 13px; }}
+  .config-label {{ color: #888; }}
+  .log-box {{ background: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 12px; font-family: 'SF Mono', Menlo, monospace; font-size: 11px; line-height: 1.6; color: #aaa; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow-y: auto; }}
+  .live-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #007AFF; animation: pulse 1.5s infinite; margin-right: 6px; }}
+  @keyframes pulse {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: 0.3; }} }}
+  .speed-stat {{ display: inline-block; margin-right: 16px; }}
+  .speed-value {{ font-size: 18px; font-weight: 600; }}
+  .speed-label {{ font-size: 11px; color: #888; }}
+</style>
+</head>
+<body class="{'uploading' if is_uploading else ('verifying' if verify_state == 'running' else '')}">
+
+<h1>{html.escape(display_name)}</h1>
+<p class="subtitle">{html.escape(storage_label)} · Updated {now.strftime('%Y-%m-%d %H:%M')}</p>
+
+<div class="grid">
+  <div class="card">
+    <div class="card-label">Current state</div>
+    <div class="card-value"><span class="status-dot" style="background:{status_color}"></span>{html.escape(status_text)}</div>
+    <div class="card-detail">{html.escape(status_detail)}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Last full backup</div>
+    <div class="card-value">{html.escape(latest_full['time'] if latest_full else 'None yet')}</div>
+    <div class="card-detail">{html.escape((latest_full_age + ' · snapshot ' + latest_full['id']) if latest_full else 'Waiting for first completed primary snapshot')}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Integrity proof</div>
+    <div class="card-value">{html.escape(verify_check_age if verify_check_dt else ('Failed' if verify_health == 'failed' else ('Running' if verify_health == 'running' else 'None yet')))}</div>
+    <div class="card-detail">restic check {html.escape(check_subset)}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Restore proof</div>
+    <div class="card-value">{html.escape(verify_restore_age if verify_restore_dt else ('Failed' if verify_health == 'failed' else ('Running' if verify_health == 'running' else 'None yet')))}</div>
+    <div class="card-detail">Canary restore drill</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Repository</div>
+    <div class="card-value">{total_size_gb} GB</div>
+    <div class="card-detail">{total_files:,} files · {snap_count} snapshots</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Schedule</div>
+    <div class="card-value">{html.escape(schedule_label)}</div>
+    <div class="card-detail">{html.escape(check_interval_days)}d integrity · {html.escape(restore_interval_days)}d restore</div>
+  </div>
+</div>
+""")
+
+if current_state in ("maintenance_warning", "waiting_for_network", "retry_pending"):
+    warning_title = {
+        "maintenance_warning": "Actionable warning",
+        "waiting_for_network": "Current blocker",
+        "retry_pending": "Current blocker",
+    }.get(current_state, "Status detail")
+    warning_text = {
+        "maintenance_warning": f"The last completed snapshot is still usable, but post-backup cleanup failed. Consecutive failures: {status_failures}.",
+        "waiting_for_network": f"The last scheduled attempt could not reach the storage backend. Consecutive failures: {status_failures}.",
+        "retry_pending": f"The last backup attempt failed before completion. Consecutive failures: {status_failures}.",
+    }.get(current_state, "")
+    print(f"""
+<div class="card" style="margin-bottom: 24px; border: 1px solid {status_color};">
+  <div class="card-label">{html.escape(warning_title)}</div>
+  <div class="card-detail" style="color: #ccc; font-size: 13px;">{html.escape(warning_text)}</div>
+  <div class="card-detail" style="margin-top: 8px;">Next scheduled retry: {html.escape(status_next_attempt)}</div>
+</div>
+""")
+
+if verify_health in ("failed", "stale", "missing"):
+    verify_warning = {
+        "failed": f"The latest verification pass failed. {display_name} should not present a green confidence signal until this is fixed.",
+        "stale": "Backups are landing, but recoverability proof is overdue. The system should warn instead of silently staying green.",
+        "missing": "No verification record exists yet. Run verification now or wait for the next due pass.",
+    }.get(verify_health, "")
+    print(f"""
+<div class="card" style="margin-bottom: 24px; border: 1px solid {verify_color};">
+  <div class="card-label">Recoverability warning</div>
+  <div class="card-detail" style="color: #ccc; font-size: 13px;">{html.escape(verify_warning)}</div>
+  <div class="card-detail" style="margin-top: 8px;">Integrity proof: {html.escape(verify_check_age)} · Restore proof: {html.escape(verify_restore_age)}</div>
+</div>
+""")
+
+if is_uploading:
+    pct_int = min(int(upload_pct), 99)
+    print(f"""
+<div class="card" style="margin-bottom: 24px;">
+  <div class="card-label"><span class="live-dot"></span>Backup running</div>
+  <div class="card-value">{int(upload_gb_done)}/{int(upload_gb_total)} GB</div>
+  <div class="progress-container">
+    <div class="progress-bar" style="width: {pct_int}%; background: #007AFF;"></div>
+  </div>
+  <div style="margin-top: 8px;">
+    <span class="speed-stat"><span class="speed-value">{pct_int}%</span> <span class="speed-label">processed</span></span>
+    <span class="speed-stat"><span class="speed-value">{html.escape(elapsed_str)}</span> <span class="speed-label">elapsed</span></span>
+  </div>
+  <div class="card-detail" style="margin-top: 4px;">{int(upload_gb_done)}/{int(upload_gb_total)} GB processed · {upload_files_done:,} / {upload_total_files:,} files</div>
+</div>
+""")
+
+if snap_data:
+    print('<div class="section-title">Snapshot history</div>')
+    print('<div class="card"><table>')
+    print('<tr><th>Time</th><th>ID</th><th>Type</th><th>Files</th><th>Size</th><th>Added</th></tr>')
+    for snap in snap_data[:15]:
+        tag = '<span class="full-tag">full</span>' if snap["is_full"] else '<span class="partial-tag">partial</span>'
+        files_str = f"{snap['files']:,}" if snap["files"] else "&mdash;"
+        size_str = f"{snap['size_gb']} GB" if snap["size_gb"] >= 1 else f"{int(snap['size_gb']*1024)} MB"
+        added_str = f"{snap['added_mb']} MB" if snap["added_mb"] else "&mdash;"
+        print(f'<tr><td>{html.escape(snap["time"])}</td><td class="mono">{html.escape(snap["id"])}</td><td>{tag}</td><td>{files_str}</td><td>{size_str}</td><td>{added_str}</td></tr>')
+    print('</table></div>')
+
+if log_tail.strip():
+    title = '<span class="live-dot"></span>Live activity' if is_uploading else 'Latest log'
+    print(f"""
+<div class="section-title">{title}</div>
+<div class="card">
+  <div class="log-box">{log_tail}</div>
+</div>
+""")
+
+print(f"""
+<div class="section-title">System configuration</div>
+<div class="card">
+  <div class="config-row"><span class="config-label">Engine</span><span>restic</span></div>
+  <div class="config-row"><span class="config-label">Storage</span><span>{html.escape(storage_label)}</span></div>
+  <div class="config-row"><span class="config-label">Scheduler</span><span>{html.escape(scheduler_label)}</span></div>
+  <div class="config-row"><span class="config-label">Verification</span><span>{html.escape(check_interval_days)}d `restic check` + {html.escape(restore_interval_days)}d canary restore</span></div>
+  <div class="config-row"><span class="config-label">Monitor</span><span>{html.escape(monitor_label)}</span></div>
+  <div class="config-row"><span class="config-label">Healthchecks</span><span>{('<a href="' + html.escape(hc_details_url) + '" style="color: #8ab4f8;">check details</a>') if hc_details_url else 'not configured'}</span></div>
+  <div class="config-row"><span class="config-label">Runtime entrypoint</span><span class="mono">{html.escape(runtime_entrypoint)}</span></div>
+  <div class="config-row"><span class="config-label">Status file</span><span class="mono">{html.escape(status_file)}</span></div>
+  <div class="config-row"><span class="config-label">Verification file</span><span class="mono">{html.escape(verify_status_file)}</span></div>
+  <div class="config-row"><span class="config-label">Logs</span><span class="mono">{html.escape(log_dir)}</span></div>
+  <div class="config-row"><span class="config-label">Exclusions</span><span class="mono">{html.escape(excludes_file)}</span></div>
+  <div class="config-row"><span class="config-label">Encryption</span><span>{html.escape(encryption_label)}</span></div>
+  <div class="config-row"><span class="config-label">Credentials</span><span>{html.escape(credentials_label)}</span></div>
+</div>
+
+<div class="section-title">Paths backed up</div>
+<div class="card" style="font-size: 13px; font-family: 'SF Mono', Menlo, monospace; line-height: 1.8;">
+  {paths_html or 'No path list available'}
+</div>
+
+<p style="color: #555; font-size: 11px; margin-top: 24px; text-align: center;">
+  {html.escape(display_name)} · File-first backup chassis
+</p>
+
+</body>
+</html>
+""")
+PYEOF

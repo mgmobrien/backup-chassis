@@ -1,0 +1,14 @@
+.DS_Store
+.env
+*.local
+*.log
+*.swp
+*.swo
+*~
+.tmp/
+tmp/
+.idea/
+.vscode/
+config/system3-backup.env
+coverage/
+__pycache__/
