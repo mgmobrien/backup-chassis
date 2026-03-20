@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`System 3 Backup` is the reusable chassis for a local-first backup system.
+`Backup chassis` is the reusable chassis for a local-first backup system.
 
 It exists to extract the shareable substrate from a working local deployment without copying Matt's personal configuration into the public surface.
 
@@ -89,7 +89,7 @@ The likely packaging sequence is:
 3. optional local setup helper or wizard after real demand exists
 
 The public name can be `System 3 Backup`.
-The local operator name can remain `Restback`.
+The local operator label can remain `Backup`.
 
 ## Extraction status
 

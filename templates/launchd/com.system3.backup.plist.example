@@ -6,7 +6,7 @@
     <string>com.system3.backup</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/ABSOLUTE/PATH/TO/system3-backup/bin/system3-backup-backup</string>
+        <string>/ABSOLUTE/PATH/TO/backup-chassis/bin/system3-backup-backup</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

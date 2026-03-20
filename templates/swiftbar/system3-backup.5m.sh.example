@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SYSTEM3_BACKUP_SWIFTBAR_RUNTIME="${SYSTEM3_BACKUP_SWIFTBAR_RUNTIME:-/ABSOLUTE/PATH/TO/system3-backup/bin/system3-backup-swiftbar}"
+SYSTEM3_BACKUP_SWIFTBAR_RUNTIME="${SYSTEM3_BACKUP_SWIFTBAR_RUNTIME:-/ABSOLUTE/PATH/TO/backup-chassis/bin/system3-backup-swiftbar}"
 exec "$SYSTEM3_BACKUP_SWIFTBAR_RUNTIME" "$@"

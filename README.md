@@ -1,9 +1,9 @@
-# System 3 Backup
+# Backup chassis
 
-`System 3 Backup` is the extracted chassis for a file-first, restic-based
+`Backup chassis` is the extracted chassis for a file-first, restic-based
 backup system.
 
-Inside Matt's local system, this backup stack is currently called `Restback`.
+Inside Matt's local system, the visible label is currently `Backup`.
 
 ## Current publication phase
 
@@ -12,14 +12,14 @@ part of the personal-incubation lane.
 
 That means:
 
-- `Restback` is still the active local operator name
+- `Backup` is the active local visible label
 - this repo is the personal publication of the reusable chassis
 - it is not yet being presented as an official `System 3` company surface
 - if it later clears the promotion gate, the company-facing framing would likely be `System 3 Backup`
 
 ## What it is
 
-`System 3 Backup` is a local-first backup chassis for macOS built around:
+`Backup chassis` is a local-first backup chassis for macOS built around:
 
 - `restic` for encrypted snapshots
 - object storage such as Backblaze B2 for offsite storage
@@ -126,6 +126,10 @@ The extracted runtime now includes:
 - `bin/system3-backup-swiftbar`
 - `bin/system3-backup-verify`
 - `bin/system3-backup-env.sh`
+
+The runtime command namespace remains `system3-backup-*` for now so the
+current live installation can keep dogfooding the extracted repo without a
+second compatibility migration.
 
 The backup runner now reads path and exclusion files instead of embedding
 Matt's exact machine paths. The verification layer preserves the current trust
