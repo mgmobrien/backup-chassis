@@ -19,8 +19,9 @@ SCHEDULER_SERVICE="${SYSTEM3_BACKUP_SCHEDULER_SERVICE:-}"
 SCHEDULER_PLIST="${SYSTEM3_BACKUP_SCHEDULER_PLIST:-}"
 HC_DETAILS_URL="${SYSTEM3_BACKUP_HEALTHCHECKS_CHECK_URL:-${HEALTHCHECKS_DETAILS_URL:-}}"
 STORAGE_URL="${SYSTEM3_BACKUP_STORAGE_URL:-}"
-VERIFY_PROCESS_MATCH="${SYSTEM3_BACKUP_VERIFY_PROCESS_MATCH:-}"
 BACKUP_PROCESS_MATCH="${SYSTEM3_BACKUP_BACKUP_PROCESS_MATCH:-restic backup}"
+BACKUP_PID_FILE="$SYSTEM3_BACKUP_PID_FILE"
+VERIFY_PID_FILE="$SYSTEM3_BACKUP_VERIFY_PID_FILE"
 
 if [[ -z "$SNAPSHOT_MATCH_PATH" && -f "$SYSTEM3_BACKUP_PATHS_FILE" ]]; then
     SNAPSHOT_MATCH_PATH="$(
@@ -41,17 +42,17 @@ PY
     )"
 fi
 
-match_pid() {
-    local pattern=""
+pid_from_file() {
+    local pid_file="$1"
     local pid=""
-    for pattern in "$@"; do
-        [[ -z "$pattern" ]] && continue
-        pid="$(pgrep -f "$pattern" 2>/dev/null | head -1 || true)"
-        if [[ -n "$pid" ]]; then
-            echo "$pid"
-            return 0
-        fi
-    done
+
+    [[ -f "$pid_file" ]] || return 1
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    [[ -n "$pid" ]] || return 1
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "$pid"
+        return 0
+    fi
     return 1
 }
 
@@ -92,9 +93,7 @@ PY
 fi
 
 RESTIC_PID=""
-if [[ -n "$BACKUP_PROCESS_MATCH" ]]; then
-    RESTIC_PID="$(pgrep -f "$BACKUP_PROCESS_MATCH" 2>/dev/null | head -1 || true)"
-fi
+RESTIC_PID="$(pid_from_file "$BACKUP_PID_FILE" || true)"
 UPLOAD_STATE="none"
 if [[ -n "$RESTIC_PID" ]]; then
     PROC_STAT="$(ps -p "$RESTIC_PID" -o stat= 2>/dev/null || true)"
@@ -105,14 +104,7 @@ if [[ -n "$RESTIC_PID" ]]; then
     fi
 fi
 
-VERIFY_PID="$(
-    match_pid \
-        "$VERIFY_PROCESS_MATCH" \
-        "$(basename "$VERIFY_COMMAND")" \
-        "system3-backup-verify" \
-        "restback-verify.sh" \
-        || true
-)"
+VERIFY_PID="$(pid_from_file "$VERIFY_PID_FILE" || true)"
 VERIFY_RUNNING="no"
 if [[ -n "$VERIFY_PID" ]]; then
     VERIFY_RUNNING="yes"
