@@ -254,6 +254,8 @@ verify_detail_text = status_summary.get("verify_detail", "Run verification now t
 verify_color = color_for_health(verify_health)
 verify_check_age = status_summary.get("verify_check_age", verify_check_age)
 verify_restore_age = status_summary.get("verify_restore_age", verify_restore_age)
+verify_check_due_detail = status_summary.get("verify_check_due_detail", "scheduled")
+verify_restore_due_detail = status_summary.get("verify_restore_due_detail", "scheduled")
 verify_check_present = bool(status_summary.get("verify_check_present", bool(verify_check_dt)))
 verify_restore_present = bool(status_summary.get("verify_restore_present", bool(verify_restore_dt)))
 
@@ -339,12 +341,12 @@ print(f"""<!DOCTYPE html>
   <div class="card">
     <div class="card-label">Integrity proof</div>
     <div class="card-value">{html.escape(verify_check_age if verify_check_present else ('Failed' if verify_health == 'failed' else ('Running' if verify_health == 'running' else 'None yet')))}</div>
-    <div class="card-detail">restic check {html.escape(check_subset)}</div>
+    <div class="card-detail">restic check {html.escape(check_subset)} · next due {html.escape(verify_check_due_detail)}</div>
   </div>
   <div class="card">
     <div class="card-label">Restore proof</div>
     <div class="card-value">{html.escape(verify_restore_age if verify_restore_present else ('Failed' if verify_health == 'failed' else ('Running' if verify_health == 'running' else 'None yet')))}</div>
-    <div class="card-detail">Canary restore drill</div>
+    <div class="card-detail">Canary restore drill · next due {html.escape(verify_restore_due_detail)}</div>
   </div>
   <div class="card">
     <div class="card-label">Repository</div>
@@ -388,7 +390,8 @@ if verify_health in ("failed", "stale", "missing"):
 <div class="card" style="margin-bottom: 24px; border: 1px solid {verify_color};">
   <div class="card-label">Recoverability warning</div>
   <div class="card-detail" style="color: #ccc; font-size: 13px;">{html.escape(verify_warning)}</div>
-  <div class="card-detail" style="margin-top: 8px;">Integrity proof: {html.escape(verify_check_age)} · Restore proof: {html.escape(verify_restore_age)}</div>
+  <div class="card-detail" style="margin-top: 8px;">Integrity proof: {html.escape(verify_check_age)} · next due {html.escape(verify_check_due_detail)}</div>
+  <div class="card-detail" style="margin-top: 4px;">Restore proof: {html.escape(verify_restore_age)} · next due {html.escape(verify_restore_due_detail)}</div>
 </div>
 """)
 

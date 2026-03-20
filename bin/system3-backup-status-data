@@ -282,8 +282,20 @@ verify_state = verify.get("state", "")
 verify_detail = verify.get("detail", "")
 verify_check_dt = parse_time(verify.get("last_check_ok_at", ""))
 verify_restore_dt = parse_time(verify.get("last_restore_ok_at", ""))
+verify_next_check_dt = parse_time(verify.get("next_check_due_at", ""))
+verify_next_restore_dt = parse_time(verify.get("next_restore_due_at", ""))
+if not verify_next_check_dt and verify_check_dt:
+    verify_next_check_dt = verify_check_dt + timedelta(days=int(verify.get("check_interval_days", 7) or 7))
+if not verify_next_restore_dt and verify_restore_dt:
+    verify_next_restore_dt = verify_restore_dt + timedelta(days=int(verify.get("restore_interval_days", 30) or 30))
 verify_check_age = age_label(verify_check_dt)
 verify_restore_age = age_label(verify_restore_dt)
+verify_check_due_time = next_run_time_label(verify_next_check_dt) if verify_next_check_dt else ""
+verify_restore_due_time = next_run_time_label(verify_next_restore_dt) if verify_next_restore_dt else ""
+verify_check_due_label = next_run_label(verify_next_check_dt) if verify_next_check_dt else ""
+verify_restore_due_label = next_run_label(verify_next_restore_dt) if verify_next_restore_dt else ""
+verify_check_due_detail = next_run_detail(verify_next_check_dt) if verify_next_check_dt else ""
+verify_restore_due_detail = next_run_detail(verify_next_restore_dt) if verify_next_restore_dt else ""
 verify_health = "missing"
 verify_text = "No verification record"
 verify_detail_text = verify_detail or "Run verification now to create the first recoverability proof."
@@ -412,6 +424,12 @@ result = {
     "verify_detail": verify_detail_text,
     "verify_check_age": verify_check_age,
     "verify_restore_age": verify_restore_age,
+    "verify_check_due_time": verify_check_due_time,
+    "verify_restore_due_time": verify_restore_due_time,
+    "verify_check_due_label": verify_check_due_label,
+    "verify_restore_due_label": verify_restore_due_label,
+    "verify_check_due_detail": verify_check_due_detail,
+    "verify_restore_due_detail": verify_restore_due_detail,
     "verify_check_present": bool(verify_check_dt),
     "verify_restore_present": bool(verify_restore_dt),
     "latest_full_present": bool(latest_full_dt or latest_full),

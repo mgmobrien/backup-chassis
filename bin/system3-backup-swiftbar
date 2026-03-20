@@ -97,6 +97,10 @@ for key in (
     "verify_detail",
     "verify_check_age",
     "verify_restore_age",
+    "verify_check_due_label",
+    "verify_restore_due_label",
+    "verify_check_due_detail",
+    "verify_restore_due_detail",
     "latest_full_age",
     "latest_full_snapshot",
     "latest_full_present",
@@ -124,14 +128,18 @@ SUMMARY_VERIFY_TEXT="$(echo "$SUMMARY_INFO" | sed -n '6p')"
 SUMMARY_VERIFY_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '7p')"
 SUMMARY_VERIFY_CHECK_AGE="$(echo "$SUMMARY_INFO" | sed -n '8p')"
 SUMMARY_VERIFY_RESTORE_AGE="$(echo "$SUMMARY_INFO" | sed -n '9p')"
-SUMMARY_LATEST_FULL_AGE="$(echo "$SUMMARY_INFO" | sed -n '10p')"
-SUMMARY_LATEST_FULL_SNAPSHOT="$(echo "$SUMMARY_INFO" | sed -n '11p')"
-SUMMARY_LATEST_FULL_PRESENT="$(echo "$SUMMARY_INFO" | sed -n '12p')"
-SUMMARY_LATEST_FULL_HOURS="$(echo "$SUMMARY_INFO" | sed -n '13p')"
-SUMMARY_LATEST_FULL_TITLE="$(echo "$SUMMARY_INFO" | sed -n '14p')"
-SUMMARY_NEXT_RUN_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '15p')"
-SUMMARY_NEXT_RUN_LABEL="$(echo "$SUMMARY_INFO" | sed -n '16p')"
-SUMMARY_NEXT_RUN_TIME="$(echo "$SUMMARY_INFO" | sed -n '17p')"
+SUMMARY_VERIFY_CHECK_DUE_LABEL="$(echo "$SUMMARY_INFO" | sed -n '10p')"
+SUMMARY_VERIFY_RESTORE_DUE_LABEL="$(echo "$SUMMARY_INFO" | sed -n '11p')"
+SUMMARY_VERIFY_CHECK_DUE_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '12p')"
+SUMMARY_VERIFY_RESTORE_DUE_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '13p')"
+SUMMARY_LATEST_FULL_AGE="$(echo "$SUMMARY_INFO" | sed -n '14p')"
+SUMMARY_LATEST_FULL_SNAPSHOT="$(echo "$SUMMARY_INFO" | sed -n '15p')"
+SUMMARY_LATEST_FULL_PRESENT="$(echo "$SUMMARY_INFO" | sed -n '16p')"
+SUMMARY_LATEST_FULL_HOURS="$(echo "$SUMMARY_INFO" | sed -n '17p')"
+SUMMARY_LATEST_FULL_TITLE="$(echo "$SUMMARY_INFO" | sed -n '18p')"
+SUMMARY_NEXT_RUN_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '19p')"
+SUMMARY_NEXT_RUN_LABEL="$(echo "$SUMMARY_INFO" | sed -n '20p')"
+SUMMARY_NEXT_RUN_TIME="$(echo "$SUMMARY_INFO" | sed -n '21p')"
 
 RESTIC_PID=""
 RESTIC_PID="$(pid_from_file "$BACKUP_PID_FILE" || true)"
@@ -162,6 +170,14 @@ fi
 
 VERIFY_CHECK_AGE="${SUMMARY_VERIFY_CHECK_AGE:-never}"
 VERIFY_RESTORE_AGE="${SUMMARY_VERIFY_RESTORE_AGE:-never}"
+VERIFY_CHECK_LINE_SUFFIX=""
+VERIFY_RESTORE_LINE_SUFFIX=""
+if [[ -n "${SUMMARY_VERIFY_CHECK_DUE_LABEL:-}" ]]; then
+    VERIFY_CHECK_LINE_SUFFIX=" (next ${SUMMARY_VERIFY_CHECK_DUE_LABEL})"
+fi
+if [[ -n "${SUMMARY_VERIFY_RESTORE_DUE_LABEL:-}" ]]; then
+    VERIFY_RESTORE_LINE_SUFFIX=" (next ${SUMMARY_VERIFY_RESTORE_DUE_LABEL})"
+fi
 
 title_gb_from_status() {
     python3 - "$STATUS_FILE" <<'PY'
@@ -431,8 +447,8 @@ else
         if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
             echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
         fi
-        echo "  Integrity check: ${VERIFY_CHECK_AGE} | size=13"
-        echo "  Restore drill: ${VERIFY_RESTORE_AGE} | size=13"
+        echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
+        echo "  Restore drill: ${VERIFY_RESTORE_AGE}${VERIFY_RESTORE_LINE_SUFFIX} | size=13"
         echo "  Snapshot ${SUMMARY_LATEST_FULL_SNAPSHOT} | font=Menlo size=12 color=#888"
     elif [[ "$SUMMARY_STATUS_CODE" == "backup_proof_stale" ]]; then
         echo "${DISPLAY_NAME} status: backup healthy, proof stale | color=${WARNING_TEXT_COLOR} size=14"
@@ -442,8 +458,8 @@ else
         if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
             echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
         fi
-        echo "  Integrity check: ${VERIFY_CHECK_AGE} | size=13"
-        echo "  Restore drill: ${VERIFY_RESTORE_AGE} | size=13"
+        echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
+        echo "  Restore drill: ${VERIFY_RESTORE_AGE}${VERIFY_RESTORE_LINE_SUFFIX} | size=13"
     else
         echo "${DISPLAY_NAME} status: ${SUMMARY_STATUS_TEXT} | color=${WARNING_TEXT_COLOR} size=14"
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
@@ -452,8 +468,8 @@ else
         if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
             echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
         fi
-        echo "  Integrity check: ${VERIFY_CHECK_AGE} | size=13"
-        echo "  Restore drill: ${VERIFY_RESTORE_AGE} | size=13"
+        echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
+        echo "  Restore drill: ${VERIFY_RESTORE_AGE}${VERIFY_RESTORE_LINE_SUFFIX} | size=13"
         echo "  ${SUMMARY_STATUS_DETAIL} | size=13 color=#888"
     fi
 fi
