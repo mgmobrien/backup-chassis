@@ -42,6 +42,11 @@ swiftbar_shell_command() {
     printf "'%s'" "$command"
 }
 
+section_label() {
+    local label="$1"
+    echo "${label} | size=11 color=#666"
+}
+
 MISSING_CREDENTIAL_VARS=()
 while IFS= read -r missing_var; do
     [[ -z "$missing_var" ]] && continue
@@ -238,7 +243,7 @@ else
 fi
 
 echo "---"
-echo "${DISPLAY_NAME} | size=13 color=#888"
+echo "${DISPLAY_NAME} | size=14 color=#444 sfimage=externaldrive.badge.checkmark"
 echo "---"
 
 # section 1: status
@@ -483,6 +488,8 @@ echo "---"
 
 # section 2: actions
 
+section_label "Actions"
+
 if [[ "$UPLOAD_STATE" == "running" ]]; then
     echo "Pause upload | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "pkill -STOP -f \"$BACKUP_PROCESS_MATCH\"") terminal=false refresh=true"
 elif [[ "$UPLOAD_STATE" == "paused" ]]; then
@@ -527,8 +534,6 @@ else
     fi
 fi
 
-echo "---"
-
 if [[ "$UPLOAD_STATE" == "none" ]]; then
     if [[ "${PRIMARY_ACTION_KIND:-backup}" != "backup" ]]; then
         echo "Run backup now | bash=$BACKUP_COMMAND terminal=true refresh=true"
@@ -536,7 +541,6 @@ if [[ "$UPLOAD_STATE" == "none" ]]; then
     if [[ "${PRIMARY_ACTION_KIND:-backup}" != "verify" ]]; then
         echo "Run integrity check + restore drill | bash=$VERIFY_COMMAND param1=--force terminal=true refresh=true"
     fi
-    echo "---"
 fi
 
 if [[ -n "$SCHEDULER_PLIST" ]]; then
@@ -547,35 +551,29 @@ if [[ -n "$SCHEDULER_PLIST" ]]; then
         RESUME_CMD="launchctl load \"$SCHEDULER_PLIST\""
         echo "Resume schedule | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "$RESUME_CMD") terminal=false refresh=true color=#34C759"
     fi
-    echo "---"
 fi
+
+echo "---"
 
 # section 3: system info
 
+section_label "System"
+
 echo "Destination: ${SYSTEM3_BACKUP_STORAGE_LABEL} | size=13 color=#888"
 echo "Schedule: ${SYSTEM3_BACKUP_SCHEDULE_LABEL} | size=13 color=#888"
-if [[ -n "$SUMMARY_NEXT_RUN_LABEL" && "$UPLOAD_STATE" == "none" ]]; then
-    echo "Next automatic run: ${SUMMARY_NEXT_RUN_LABEL} | size=13 color=#888"
-elif [[ -n "$SUMMARY_NEXT_RUN_DETAIL" && "$UPLOAD_STATE" == "none" ]]; then
-    echo "Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13 color=#888"
-fi
 echo "Recovery proof: ${SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS}d integrity check + ${SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS}d test restore | size=13 color=#888"
-echo "  Integrity check reads backup data for corruption. | size=12 color=#888"
-echo "  Restore drill restores a canary file to prove recovery. | size=12 color=#888"
+echo "  Reads backup data for corruption and test-restores a canary file. | size=12 color=#888"
 echo "Encryption: ${SYSTEM3_BACKUP_ENCRYPTION_LABEL} | size=13 color=#888"
 
 echo "---"
 
 # section 4: links and tools
 
+section_label "Open"
+
 if [[ -n "$DASHBOARD_COMMAND" && -n "$DASHBOARD_OUTPUT" ]]; then
     OPEN_DASHBOARD_CMD="\"$DASHBOARD_COMMAND\" && open \"$DASHBOARD_OUTPUT\""
     echo "Open ${DISPLAY_NAME} dashboard | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "$OPEN_DASHBOARD_CMD") terminal=false refresh=true"
-fi
-
-LATEST_LOG="$(ls -t "$SYSTEM3_BACKUP_LOG_DIR"/backup-*.log 2>/dev/null | head -1 || true)"
-if [[ -n "$LATEST_LOG" ]]; then
-    echo "View latest log | bash=/usr/bin/open param1=$LATEST_LOG terminal=false"
 fi
 
 if [[ -n "$HC_DETAILS_URL" ]]; then
@@ -584,6 +582,11 @@ fi
 
 if [[ -n "$STORAGE_URL" ]]; then
     echo "Open storage console | href=${STORAGE_URL}"
+fi
+
+LATEST_LOG="$(ls -t "$SYSTEM3_BACKUP_LOG_DIR"/backup-*.log 2>/dev/null | head -1 || true)"
+if [[ -n "$LATEST_LOG" ]]; then
+    echo "Open latest backup log | bash=/usr/bin/open param1=$LATEST_LOG terminal=false"
 fi
 
 echo "---"
