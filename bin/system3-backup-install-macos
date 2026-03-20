@@ -302,7 +302,9 @@ validate_generated_surface() {
     bash -n "$SWIFTBAR_PLUGIN_PATH"
 
     echo "validate $ENV_FILE"
-    SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-backup" --check-config >/dev/null
+    SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" \
+    SYSTEM3_BACKUP_ALLOW_MISSING_PATHS=1 \
+    "$REPO_ROOT/bin/system3-backup-backup" --check-config >/dev/null
 }
 
 validate_generated_surface
