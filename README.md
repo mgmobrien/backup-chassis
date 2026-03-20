@@ -93,6 +93,7 @@ That means:
 
 - `docs/architecture.md` — role boundaries and source-of-truth split
 - `docs/install-macos.md` — setup guidance for a second macOS machine
+- `docs/portability.md` — portable-core vs platform-adapter boundaries
 - `config/` — example config surfaces for reusable deployments
 - `templates/` — example `launchd` and status-surface templates
 - `bin/` — reusable scripts for backup system components
@@ -150,11 +151,15 @@ paths into the public chassis.
 Before you point this at a real repository, run:
 
 ```bash
+bin/system3-backup-doctor --portable-core
 bin/system3-backup-doctor
 bin/system3-backup-ci-check
 ```
 
-`system3-backup-doctor` checks the host assumptions.
+`system3-backup-doctor --portable-core` checks the reusable runtime
+prerequisites.
+
+`system3-backup-doctor` checks the full current macOS deployment assumptions.
 
 `system3-backup-ci-check` runs shell syntax validation plus the repo smoke
 test, which bootstraps a temp install surface and verifies that the generated

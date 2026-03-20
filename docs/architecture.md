@@ -72,6 +72,7 @@ Within the public surface:
 - `README.md` is the compact overview
 - `docs/architecture.md` is the deeper reference description
 - `docs/install-macos.md` is the first operator-facing setup path
+- `docs/portability.md` defines the portable-core vs adapter boundary
 - future install/runbook docs should explain setup and operation for a new user
 
 Within the internal surface:
@@ -90,6 +91,17 @@ The likely packaging sequence is:
 
 The public name can be `System 3 Backup`.
 The local operator label can remain `Backup`.
+
+## Portability boundary
+
+The public chassis is still macOS-first, but it now has an explicit portability
+boundary:
+
+- portable core: env loading, backup execution, verification logic, state-file generation, dashboard rendering
+- macOS adapter: `launchd`, SwiftBar, `caffeinate`, `osascript`, and the current install/bootstrap path
+- future Linux adapter: separate scheduler + operator-surface contract, not conditionals pasted through the current macOS scripts
+
+That split is described in `docs/portability.md`.
 
 ## Extraction status
 

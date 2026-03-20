@@ -1,16 +1,53 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-required_commands=(
+MODE="macos"
+
+usage() {
+    cat <<EOF
+Usage: system3-backup-doctor [--portable-core]
+
+Checks host prerequisites for backup-chassis.
+
+Modes:
+  --portable-core   Check only the portable runtime prerequisites
+  -h, --help        Show this help
+
+Default behavior checks the current macOS deployment surface.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --portable-core)
+            MODE="portable-core"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+portable_required_commands=(
     bash
     python3
     curl
-    launchctl
-    plutil
     restic
 )
 
-optional_commands=(
+macos_required_commands=(
+    launchctl
+    plutil
+)
+
+macos_optional_commands=(
     caffeinate
     osascript
 )
@@ -21,15 +58,23 @@ if [[ -d "/Applications/SwiftBar.app" || -d "$HOME/Applications/SwiftBar.app" ]]
 fi
 
 failures=0
+required_commands=("${portable_required_commands[@]}")
 
 echo "Backup chassis doctor"
 echo "======================"
 
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    echo "os: ok (macOS)"
+if [[ "$MODE" == "portable-core" ]]; then
+    echo "scope: portable core"
+    echo "os: info ($(uname -s))"
 else
-    echo "os: missing (requires macOS)"
-    failures=$((failures + 1))
+    echo "scope: macOS deployment"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "os: ok (macOS)"
+    else
+        echo "os: missing (requires macOS)"
+        failures=$((failures + 1))
+    fi
+    required_commands+=("${macos_required_commands[@]}")
 fi
 
 echo
@@ -45,14 +90,18 @@ done
 
 echo
 echo "optional components:"
-for command_name in "${optional_commands[@]}"; do
-    if command -v "$command_name" >/dev/null 2>&1; then
-        printf '  ok       %s -> %s\n' "$command_name" "$(command -v "$command_name")"
-    else
-        printf '  missing  %s\n' "$command_name"
-    fi
-done
-printf '  %s       SwiftBar app\n' "$swiftbar_detected"
+if [[ "$MODE" == "portable-core" ]]; then
+    echo "  skipped   macOS adapter checks"
+else
+    for command_name in "${macos_optional_commands[@]}"; do
+        if command -v "$command_name" >/dev/null 2>&1; then
+            printf '  ok       %s -> %s\n' "$command_name" "$(command -v "$command_name")"
+        else
+            printf '  missing  %s\n' "$command_name"
+        fi
+    done
+    printf '  %s       SwiftBar app\n' "$swiftbar_detected"
+fi
 
 echo
 if (( failures > 0 )); then
