@@ -295,16 +295,38 @@ exec "$REPO_ROOT/bin/system3-backup-swiftbar" "\$@"
 EOF
 
 validate_generated_surface() {
+    local validation_env
+
     echo "validate $LAUNCH_AGENT_PATH"
     plutil -lint "$LAUNCH_AGENT_PATH" >/dev/null
 
     echo "validate $SWIFTBAR_PLUGIN_PATH"
     bash -n "$SWIFTBAR_PLUGIN_PATH"
 
+    validation_env="$(mktemp "${TMPDIR:-/tmp}/system3-backup-install-macos-validate.XXXXXX")"
+    python3 - "$ENV_FILE" "$validation_env" <<'PY'
+import sys
+from pathlib import Path
+
+source_path = Path(sys.argv[1])
+target_path = Path(sys.argv[2])
+lines = source_path.read_text().splitlines()
+found = False
+output = []
+for line in lines:
+    if line.startswith("SYSTEM3_BACKUP_ALLOW_MISSING_PATHS="):
+        output.append('SYSTEM3_BACKUP_ALLOW_MISSING_PATHS="1"')
+        found = True
+    else:
+        output.append(line)
+if not found:
+    output.append('SYSTEM3_BACKUP_ALLOW_MISSING_PATHS="1"')
+target_path.write_text("\n".join(output) + "\n")
+PY
+
     echo "validate $ENV_FILE"
-    SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" \
-    SYSTEM3_BACKUP_ALLOW_MISSING_PATHS=1 \
-    "$REPO_ROOT/bin/system3-backup-backup" --check-config >/dev/null
+    SYSTEM3_BACKUP_ENV_FILE="$validation_env" "$REPO_ROOT/bin/system3-backup-backup" --check-config >/dev/null
+    rm -f "$validation_env"
 }
 
 validate_generated_surface
