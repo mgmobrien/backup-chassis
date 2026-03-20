@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# <swiftbar.hideAbout>true</swiftbar.hideAbout>
+# <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>
+# <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>
 set -euo pipefail
 
 SYSTEM3_BACKUP_SWIFTBAR_RUNTIME="${SYSTEM3_BACKUP_SWIFTBAR_RUNTIME:-/ABSOLUTE/PATH/TO/backup-chassis/bin/system3-backup-swiftbar}"

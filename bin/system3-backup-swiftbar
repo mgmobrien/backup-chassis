@@ -230,7 +230,7 @@ else
     if [[ "$SUMMARY_STATUS_CODE" == "verification_failed" ]]; then
         echo "fail | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
     elif [[ "$SUMMARY_STATUS_HEALTH" == "ok" ]]; then
-        echo "| sfimage=checkmark.circle.fill sfcolor=34C759"
+        echo "| sfimage=externaldrive.badge.checkmark sfcolor=34C759"
     elif [[ "$SUMMARY_STATUS_CODE" == "backup_proof_stale" || "$SUMMARY_STATUS_CODE" == "backup_delayed_proof_stale" ]]; then
         echo "proof | sfimage=exclamationmark.triangle.fill sfcolor=FF9500"
     elif [[ "$SUMMARY_STATUS_CODE" == "backup_delayed" ]]; then
@@ -590,4 +590,4 @@ if [[ -n "$LATEST_LOG" ]]; then
 fi
 
 echo "---"
-echo "Refresh | refresh=true"
+echo "Refresh this menu | refresh=true"
