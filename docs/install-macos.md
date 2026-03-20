@@ -14,9 +14,14 @@ Today, the repo contains:
 ## 1. Install dependencies
 
 - install `restic`
-- choose an object storage backend
+- choose a `restic` backend
 - create a local config directory, for example `~/.config/system3-backup/`
 - ensure `python3`, `curl`, `launchctl`, and `plutil` are available
+
+The generated example config uses S3-compatible object storage credentials.
+If you use a different backend, replace those vars with the ones that backend
+expects and set `SYSTEM3_BACKUP_REQUIRED_RUNTIME_ENV_VARS` if the runtime
+should explicitly gate on additional env vars.
 
 Check the host assumptions before generating files:
 
@@ -73,9 +78,10 @@ Recommended local filenames:
 
 In `system3-backup.env`, set:
 
-- restic repository and credentials
+- restic repository and the credential vars for your chosen backend
+- `SYSTEM3_BACKUP_REQUIRED_RUNTIME_ENV_VARS` if your backend needs env vars beyond the runtime defaults
 - state and log directories
-- `SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH` to a representative path from your backup set
+- `SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH` only if you want to override the default matching behavior; if left blank, the first configured backup path is used automatically
 
 ## 4. Check config before first run
 

@@ -22,11 +22,16 @@ That means:
 `Backup chassis` is a local-first backup chassis for macOS built around:
 
 - `restic` for encrypted snapshots
-- object storage such as Backblaze B2 for offsite storage
+- an operator-chosen `restic` backend, with S3-compatible object storage such as Backblaze B2 as the currently documented example
 - `launchd` for unattended scheduling
 - healthchecks-style heartbeat monitoring
 - a local status surface for operator confidence
 - periodic integrity and restore-proof verification
+
+The current public examples assume S3-compatible object storage or Backblaze
+B2. Other `restic` backends can still work, but if they require additional env
+vars you should declare those in `SYSTEM3_BACKUP_REQUIRED_RUNTIME_ENV_VARS` so
+the status surfaces gate on the right credentials.
 
 The intended promise is not merely "snapshots happen." The intended promise is:
 

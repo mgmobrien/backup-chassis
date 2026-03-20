@@ -63,10 +63,13 @@ swiftbar_shell_command() {
     printf "'%s'" "$command"
 }
 
-if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${RESTIC_PASSWORD:-}" ]]; then
+mapfile -t MISSING_CREDENTIAL_VARS < <(system3_backup_missing_runtime_credentials)
+if (( ${#MISSING_CREDENTIAL_VARS[@]} > 0 )); then
+    MISSING_TEXT="${MISSING_CREDENTIAL_VARS[*]}"
+    MISSING_TEXT="${MISSING_TEXT// /, }"
     echo "🔴 No creds"
     echo "---"
-    echo "Missing credentials in local config or keychain | color=red"
+    echo "Missing credentials: ${MISSING_TEXT} | color=red"
     exit 0
 fi
 

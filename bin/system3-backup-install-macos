@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck disable=SC1091
+source "$REPO_ROOT/bin/system3-backup-env.sh"
 
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/system3-backup"
 STATE_DIR="$HOME/.local/state/system3-backup"
@@ -12,15 +14,21 @@ DASHBOARD_OUTPUT="$DASHBOARD_DIR/index.html"
 LAUNCH_AGENT_PATH="$HOME/Library/LaunchAgents/com.system3.backup.plist"
 SWIFTBAR_PLUGIN_PATH="$HOME/Library/Application Support/SwiftBar/Plugins/system3-backup.5m.sh"
 SERVICE_LABEL="com.system3.backup"
-DISPLAY_NAME="System 3 Backup"
+DISPLAY_NAME="Backup"
 SCHEDULE_INTERVAL_SECONDS="14400"
 FORCE="0"
+
+schedule_label_for_interval() {
+    local interval_label
+    interval_label="$(system3_backup_format_interval_label "$SCHEDULE_INTERVAL_SECONDS")"
+    printf '%s + on login' "$interval_label"
+}
 
 usage() {
     cat <<EOF
 Usage: system3-backup-install-macos [options]
 
-Creates a machine-local bootstrap surface for System 3 Backup on macOS.
+Creates a machine-local bootstrap surface for backup-chassis on macOS.
 
 Options:
   --config-home PATH                 Config directory (default: $CONFIG_HOME)
@@ -167,16 +175,19 @@ copy_file_if_allowed() {
 }
 
 write_file_if_allowed "$ENV_FILE" 0644 <<EOF
-# Machine-local environment for System 3 Backup
+# Machine-local environment for backup-chassis
 #
 # Fill in the repository target and credentials before loading the launch agent.
 
 # restic repository target
 RESTIC_REPOSITORY="s3:s3.us-west-000.backblazeb2.com/example-bucket"
 
-# Storage credentials
+# Storage credentials for an S3-compatible backend.
+# If you use a different restic backend, replace these with the vars that backend expects.
+# If that backend needs additional env vars, list them in SYSTEM3_BACKUP_REQUIRED_RUNTIME_ENV_VARS.
 AWS_ACCESS_KEY_ID="example-key-id"
 AWS_SECRET_ACCESS_KEY="example-secret-key"
+SYSTEM3_BACKUP_REQUIRED_RUNTIME_ENV_VARS=""
 
 # Encryption passphrase
 RESTIC_PASSWORD="replace-me"
@@ -217,7 +228,7 @@ SYSTEM3_BACKUP_DISPLAY_NAME="$DISPLAY_NAME"
 SYSTEM3_BACKUP_STORAGE_LABEL="\$RESTIC_REPOSITORY"
 SYSTEM3_BACKUP_STORAGE_URL=""
 SYSTEM3_BACKUP_SCHEDULER_LABEL="launchd"
-SYSTEM3_BACKUP_SCHEDULE_LABEL="Every 4h"
+SYSTEM3_BACKUP_SCHEDULE_LABEL="$(schedule_label_for_interval)"
 SYSTEM3_BACKUP_SCHEDULER_SERVICE="$SERVICE_LABEL"
 SYSTEM3_BACKUP_SCHEDULER_PLIST="$LAUNCH_AGENT_PATH"
 SYSTEM3_BACKUP_MONITOR_LABEL="healthchecks.io"
@@ -228,7 +239,8 @@ SYSTEM3_BACKUP_VERIFY_SCRIPT="$REPO_ROOT/bin/system3-backup-verify"
 SYSTEM3_BACKUP_VERIFY_PROCESS_MATCH="system3-backup-verify"
 
 # Verification tuning
-SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH="\$HOME/Documents"
+# Leave blank to use the first configured backup path automatically.
+SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH=""
 SYSTEM3_BACKUP_CHECK_SUBSET="1/16"
 SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS="7"
 SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS="30"

@@ -22,7 +22,7 @@ fi
 
 failures=0
 
-echo "System 3 Backup doctor"
+echo "Backup chassis doctor"
 echo "======================"
 
 if [[ "$(uname -s)" == "Darwin" ]]; then

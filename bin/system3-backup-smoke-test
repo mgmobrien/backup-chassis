@@ -61,7 +61,7 @@ echo "bootstrap temp install"
     --dashboard-dir "$DASHBOARD_DIR" \
     --launch-agent-path "$LAUNCH_AGENT_PATH" \
     --swiftbar-plugin-path "$SWIFTBAR_PLUGIN_PATH" \
-    --display-name "System 3 Backup Smoke"
+    --display-name "Backup smoke"
 
 cat > "$CONFIG_HOME/paths.txt" <<EOF
 $SMOKE_DOCS
@@ -71,7 +71,7 @@ cat >> "$ENV_FILE" <<EOF
 
 SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH="$SMOKE_DOCS"
 SYSTEM3_BACKUP_SCHEDULER_SERVICE=""
-SYSTEM3_BACKUP_DISPLAY_NAME="System 3 Backup Smoke"
+SYSTEM3_BACKUP_DISPLAY_NAME="Backup smoke"
 EOF
 
 python3 - "$STATE_DIR" "$SMOKE_DOCS" "$SMOKE_SNAPSHOT_ID" <<'PY'
@@ -138,13 +138,13 @@ SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-backup" --che
 
 echo "render dashboard"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-dashboard" >/dev/null
-rg -q "System 3 Backup Smoke" "$DASHBOARD_DIR/index.html"
+rg -q "Backup smoke" "$DASHBOARD_DIR/index.html"
 rg -q "$SMOKE_SNAPSHOT_ID" "$DASHBOARD_DIR/index.html"
 
 echo "render menubar"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-swiftbar" > "$TMP_ROOT/swiftbar.txt"
 rg -q "checkmark.circle.fill" "$TMP_ROOT/swiftbar.txt"
-rg -q "System 3 Backup Smoke status: verified" "$TMP_ROOT/swiftbar.txt"
+rg -q "Backup smoke status: verified" "$TMP_ROOT/swiftbar.txt"
 rg -q "$SMOKE_SNAPSHOT_ID" "$TMP_ROOT/swiftbar.txt"
 
 cat <<EOF

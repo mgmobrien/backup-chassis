@@ -1,5 +1,103 @@
 #!/usr/bin/env bash
 
+system3_backup_format_interval_label() {
+    local seconds="${1:-0}"
+    if ! [[ "$seconds" =~ ^[0-9]+$ ]] || [[ "$seconds" -le 0 ]]; then
+        echo "Scheduled"
+        return
+    fi
+
+    if (( seconds % 86400 == 0 )); then
+        local days=$((seconds / 86400))
+        echo "Every ${days}d"
+        return
+    fi
+
+    if (( seconds % 3600 == 0 )); then
+        local hours=$((seconds / 3600))
+        echo "Every ${hours}h"
+        return
+    fi
+
+    if (( seconds % 60 == 0 )); then
+        local minutes=$((seconds / 60))
+        echo "Every ${minutes}m"
+        return
+    fi
+
+    echo "Every ${seconds}s"
+}
+
+system3_backup_first_configured_path() {
+    local path_file="$1"
+    python3 - "$path_file" <<'PY'
+import os
+import sys
+
+path_file = sys.argv[1]
+try:
+    with open(path_file) as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            print(os.path.expandvars(os.path.expanduser(line)))
+            break
+except FileNotFoundError:
+    pass
+PY
+}
+
+system3_backup_runtime_credential_vars() {
+    local name=""
+    if [[ -n "${SYSTEM3_BACKUP_REQUIRED_RUNTIME_ENV_VARS:-}" ]]; then
+        printf '%s\n' RESTIC_REPOSITORY RESTIC_PASSWORD
+        for name in $SYSTEM3_BACKUP_REQUIRED_RUNTIME_ENV_VARS; do
+            [[ -z "$name" ]] && continue
+            [[ "$name" == "RESTIC_REPOSITORY" || "$name" == "RESTIC_PASSWORD" ]] && continue
+            printf '%s\n' "$name"
+        done
+        return
+    fi
+
+    printf '%s\n' RESTIC_REPOSITORY RESTIC_PASSWORD
+
+    case "${RESTIC_REPOSITORY:-}" in
+        s3:*)
+            printf '%s\n' AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+            ;;
+        b2:*)
+            printf '%s\n' B2_ACCOUNT_ID B2_ACCOUNT_KEY
+            ;;
+    esac
+}
+
+system3_backup_missing_runtime_credentials() {
+    local name=""
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        if [[ -z "${!name:-}" ]]; then
+            printf '%s\n' "$name"
+        fi
+    done < <(system3_backup_runtime_credential_vars)
+}
+
+system3_backup_require_runtime_credentials() {
+    local missing=()
+    local name=""
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        missing+=("$name")
+    done < <(system3_backup_missing_runtime_credentials)
+
+    if (( ${#missing[@]} > 0 )); then
+        local missing_text="${missing[*]}"
+        missing_text="${missing_text// /, }"
+        printf 'Missing required environment variable(s): %s\n' "$missing_text" >&2
+        return 1
+    fi
+}
+
 system3_backup_load_env() {
     export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
@@ -24,6 +122,7 @@ system3_backup_load_env() {
     export SYSTEM3_BACKUP_CANARY_FILE="${SYSTEM3_BACKUP_CANARY_FILE:-$SYSTEM3_BACKUP_CONFIG_HOME/restore-canary-do-not-edit.txt}"
     export SYSTEM3_BACKUP_PATHS_FILE="${SYSTEM3_BACKUP_PATHS_FILE:-$SYSTEM3_BACKUP_CONFIG_HOME/paths.txt}"
     export SYSTEM3_BACKUP_EXCLUDES_FILE="${SYSTEM3_BACKUP_EXCLUDES_FILE:-$SYSTEM3_BACKUP_CONFIG_HOME/excludes.txt}"
+    export SYSTEM3_BACKUP_REQUIRED_RUNTIME_ENV_VARS="${SYSTEM3_BACKUP_REQUIRED_RUNTIME_ENV_VARS:-}"
     export SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS="${SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS:-14400}"
     export SYSTEM3_BACKUP_FAIL_ALERT_THRESHOLD="${SYSTEM3_BACKUP_FAIL_ALERT_THRESHOLD:-3}"
     export SYSTEM3_BACKUP_NETWORK_CHECK_URL="${SYSTEM3_BACKUP_NETWORK_CHECK_URL:-}"
@@ -40,11 +139,11 @@ system3_backup_load_env() {
     export SYSTEM3_BACKUP_DASHBOARD_DIR="${SYSTEM3_BACKUP_DASHBOARD_DIR:-$SYSTEM3_BACKUP_STATE_DIR/dashboard}"
     export SYSTEM3_BACKUP_DASHBOARD_OUTPUT="${SYSTEM3_BACKUP_DASHBOARD_OUTPUT:-$SYSTEM3_BACKUP_DASHBOARD_DIR/index.html}"
     export SYSTEM3_BACKUP_DASHBOARD_ENTRYPOINT="${SYSTEM3_BACKUP_DASHBOARD_ENTRYPOINT:-}"
-    export SYSTEM3_BACKUP_DISPLAY_NAME="${SYSTEM3_BACKUP_DISPLAY_NAME:-System 3 Backup}"
+    export SYSTEM3_BACKUP_DISPLAY_NAME="${SYSTEM3_BACKUP_DISPLAY_NAME:-Backup}"
     export SYSTEM3_BACKUP_STORAGE_LABEL="${SYSTEM3_BACKUP_STORAGE_LABEL:-${RESTIC_REPOSITORY:-Configured object storage}}"
     export SYSTEM3_BACKUP_STORAGE_URL="${SYSTEM3_BACKUP_STORAGE_URL:-}"
     export SYSTEM3_BACKUP_SCHEDULER_LABEL="${SYSTEM3_BACKUP_SCHEDULER_LABEL:-launchd}"
-    export SYSTEM3_BACKUP_SCHEDULE_LABEL="${SYSTEM3_BACKUP_SCHEDULE_LABEL:-Every 4h}"
+    export SYSTEM3_BACKUP_SCHEDULE_LABEL="${SYSTEM3_BACKUP_SCHEDULE_LABEL:-$(system3_backup_format_interval_label "${SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS:-14400}")}"
     export SYSTEM3_BACKUP_SCHEDULER_SERVICE="${SYSTEM3_BACKUP_SCHEDULER_SERVICE:-}"
     export SYSTEM3_BACKUP_SCHEDULER_PLIST="${SYSTEM3_BACKUP_SCHEDULER_PLIST:-}"
     export SYSTEM3_BACKUP_MONITOR_LABEL="${SYSTEM3_BACKUP_MONITOR_LABEL:-healthchecks.io}"
@@ -56,6 +155,10 @@ system3_backup_load_env() {
     export SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS="${SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS:-7}"
     export SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS="${SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS:-30}"
     export SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH="${SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH:-}"
+    if [[ -z "$SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH" && -f "$SYSTEM3_BACKUP_PATHS_FILE" ]]; then
+        SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH="$(system3_backup_first_configured_path "$SYSTEM3_BACKUP_PATHS_FILE")"
+        export SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH
+    fi
 
     mkdir -p "$SYSTEM3_BACKUP_CONFIG_HOME" "$SYSTEM3_BACKUP_LOG_DIR" "$SYSTEM3_BACKUP_STATUS_DIR" "$SYSTEM3_BACKUP_DASHBOARD_DIR"
 }
