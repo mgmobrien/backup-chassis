@@ -68,6 +68,7 @@ by Matt.
 
 The shared cross-platform operator surface is:
 
+- `bin/system3-backup` as the public CLI front door
 - `bin/system3-backup-status` for concise text or `--json` machine-readable status
 
 Those local operator surfaces still exist on Matt's machine under:
@@ -132,6 +133,7 @@ setup layer after real users clarify the happy path.
 
 The extracted runtime now includes:
 
+- `bin/system3-backup`
 - `bin/system3-backup-backup`
 - `bin/system3-backup-dashboard`
 - `bin/system3-backup-doctor`
@@ -181,20 +183,51 @@ surface.
 Before you point this at a real repository, run:
 
 ```bash
-bin/system3-backup-doctor --portable-core
-bin/system3-backup-doctor
+bin/system3-backup doctor --portable-core
+bin/system3-backup doctor
 bin/system3-backup-ci-check
 ```
 
-`system3-backup-doctor --portable-core` checks the reusable runtime
+`system3-backup doctor --portable-core` checks the reusable runtime
 prerequisites.
 
-`system3-backup-doctor` checks the full current macOS deployment assumptions.
+`system3-backup doctor` checks the full current macOS deployment assumptions.
 
 `system3-backup-ci-check` runs shell syntax validation plus the repo smoke
 test, which bootstraps a temp install surface and verifies that the generated
 env, launchd plist, status surface, dashboard, and SwiftBar output cohere end
 to end.
+
+## Public CLI
+
+The public CLI entrypoint is:
+
+```bash
+bin/system3-backup
+```
+
+That front door is what an agent installer should prefer when presenting and
+executing setup, because it exposes the stable public actions instead of making
+the human reason about the raw script list.
+
+Useful commands:
+
+```bash
+bin/system3-backup help
+bin/system3-backup doctor
+bin/system3-backup install --plan
+bin/system3-backup install --platform linux --plan --json
+bin/system3-backup backup --check-config
+bin/system3-backup status --json
+bin/system3-backup verify --force
+bin/system3-backup smoke-test
+```
+
+The install command is now programmatic:
+
+- `--plan` prints what would be created without writing files
+- `--json` emits machine-readable output for agents and wrappers
+- `install` dispatches to the current platform by default, or accepts `--platform macos|linux`
 
 ## License
 

@@ -26,7 +26,7 @@ should explicitly gate on additional env vars.
 Check the host assumptions before generating files:
 
 ```bash
-bin/system3-backup-doctor
+bin/system3-backup doctor
 ```
 
 ## 2. Bootstrap the local install surface
@@ -34,7 +34,7 @@ bin/system3-backup-doctor
 The fastest path is now:
 
 ```bash
-bin/system3-backup-install-macos
+bin/system3-backup install
 ```
 
 The installer now runs the doctor check first, then self-validates what it
@@ -54,6 +54,16 @@ The legacy `SYSTEM3_BACKUP_USE_CAFFEINATE` and
 `SYSTEM3_BACKUP_ENABLE_MACOS_NOTIFICATIONS` vars still work as compatibility
 aliases for existing installs.
 
+If you want an agent-safe preview first, use:
+
+```bash
+bin/system3-backup install --plan
+bin/system3-backup install --plan --json
+```
+
+That prints the exact output paths and whether each file would be written or
+preserved before anything touches the machine.
+
 That creates, without overwriting existing files unless you pass `--force`:
 
 - `~/.config/system3-backup/system3-backup.env`
@@ -65,7 +75,7 @@ That creates, without overwriting existing files unless you pass `--force`:
 You can override those output paths with flags such as:
 
 ```bash
-bin/system3-backup-install-macos \
+bin/system3-backup install --platform macos \
   --config-home ~/.config/system3-backup \
   --launch-agent-path ~/Library/LaunchAgents/com.system3.backup.plist \
   --swiftbar-plugin-path ~/Library/Application\ Support/SwiftBar/Plugins/system3-backup.5m.sh
@@ -98,7 +108,7 @@ In `system3-backup.env`, set:
 From the repo root:
 
 ```bash
-bin/system3-backup-backup --check-config
+bin/system3-backup backup --check-config
 ```
 
 That resolves the path file, confirms the canary location, and prints the
@@ -109,7 +119,7 @@ explicitly, run:
 
 ```bash
 SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
-bin/system3-backup-backup --check-config
+bin/system3-backup backup --check-config
 ```
 
 ## 5. Run the first backup
@@ -117,7 +127,7 @@ bin/system3-backup-backup --check-config
 From the repo root:
 
 ```bash
-bin/system3-backup-backup
+bin/system3-backup backup
 ```
 
 The backup runner:
@@ -134,7 +144,7 @@ The backup runner:
 Before using the repo on a real machine, you can run the repo smoke test:
 
 ```bash
-bin/system3-backup-smoke-test
+bin/system3-backup smoke-test
 ```
 
 That bootstraps a temp install surface, seeds synthetic status state, and
@@ -160,7 +170,7 @@ fail by design.
 From the repo root:
 
 ```bash
-bin/system3-backup-verify --force
+bin/system3-backup verify --force
 ```
 
 That performs:
@@ -209,14 +219,14 @@ a specific local path.
 The cross-platform CLI status surface lives at:
 
 ```bash
-bin/system3-backup-status
+bin/system3-backup status
 ```
 
 Point it at your local env file if needed:
 
 ```bash
 SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
-bin/system3-backup-status
+bin/system3-backup status
 ```
 
 For machine-readable output:

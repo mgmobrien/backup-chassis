@@ -20,4 +20,4 @@ done < <(find "$REPO_ROOT/bin" -maxdepth 1 -type f | sort)
 
 echo
 echo "linux smoke test"
-"$REPO_ROOT/bin/system3-backup-linux-smoke-test"
+"$REPO_ROOT/bin/system3-backup" smoke-test --platform linux

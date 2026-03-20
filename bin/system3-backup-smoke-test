@@ -66,7 +66,33 @@ SMOKE_SNAPSHOT_ID="smoke1234"
 mkdir -p "$SMOKE_DOCS"
 
 echo "bootstrap temp install"
-"$REPO_ROOT/bin/system3-backup-install-macos" \
+SYSTEM3_BACKUP_PLAN_JSON="$TMP_ROOT/install-plan.json"
+"$REPO_ROOT/bin/system3-backup" install --platform macos \
+    --config-home "$CONFIG_HOME" \
+    --state-dir "$STATE_DIR" \
+    --log-dir "$LOG_DIR" \
+    --dashboard-dir "$DASHBOARD_DIR" \
+    --launch-agent-path "$LAUNCH_AGENT_PATH" \
+    --swiftbar-plugin-path "$SWIFTBAR_PLUGIN_PATH" \
+    --display-name "Backup smoke" \
+    --plan \
+    --json > "$SYSTEM3_BACKUP_PLAN_JSON"
+
+python3 - "$SYSTEM3_BACKUP_PLAN_JSON" "$ENV_FILE" "$LAUNCH_AGENT_PATH" <<'PY'
+import json
+import sys
+
+plan_path, env_file, launch_agent_path = sys.argv[1:4]
+with open(plan_path) as handle:
+    data = json.load(handle)
+
+assert data["mode"] == "plan", data
+assert data["platform"] == "macos", data
+assert any(item["label"] == "env" and item["path"] == env_file for item in data["outputs"]), data
+assert any(item["label"] == "launch_agent" and item["path"] == launch_agent_path for item in data["outputs"]), data
+PY
+
+"$REPO_ROOT/bin/system3-backup" install --platform macos \
     --config-home "$CONFIG_HOME" \
     --state-dir "$STATE_DIR" \
     --log-dir "$LOG_DIR" \
@@ -156,12 +182,12 @@ assert_contains "Backup smoke" "$DASHBOARD_DIR/index.html"
 assert_contains "$SMOKE_SNAPSHOT_ID" "$DASHBOARD_DIR/index.html"
 
 echo "render cli status"
-SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-status" > "$TMP_ROOT/status.txt"
+SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup" status > "$TMP_ROOT/status.txt"
 assert_contains "Backup smoke: Healthy" "$TMP_ROOT/status.txt"
 assert_contains "Snapshot $SMOKE_SNAPSHOT_ID" "$TMP_ROOT/status.txt"
 assert_contains "Verification: Recoverability verified" "$TMP_ROOT/status.txt"
 
-SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-status" --json > "$TMP_ROOT/status.json"
+SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup" status --json > "$TMP_ROOT/status.json"
 python3 - "$TMP_ROOT/status.json" "$SMOKE_SNAPSHOT_ID" <<'PY'
 import json
 import sys
@@ -182,6 +208,11 @@ SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-swiftbar" > "
 assert_contains "checkmark.circle.fill" "$TMP_ROOT/swiftbar.txt"
 assert_contains "Backup smoke status: verified" "$TMP_ROOT/swiftbar.txt"
 assert_contains "$SMOKE_SNAPSHOT_ID" "$TMP_ROOT/swiftbar.txt"
+
+echo "check cli help"
+"$REPO_ROOT/bin/system3-backup" help > "$TMP_ROOT/help.txt"
+assert_contains "install [--platform macos|linux]" "$TMP_ROOT/help.txt"
+assert_contains "smoke-test [--platform ...]" "$TMP_ROOT/help.txt"
 
 cat <<EOF
 Smoke test passed.

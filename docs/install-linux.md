@@ -27,8 +27,8 @@ It does not currently include a Linux tray integration.
 From the repo root:
 
 ```bash
-bin/system3-backup-doctor --portable-core
-bin/system3-backup-doctor --linux-adapter
+bin/system3-backup doctor --portable-core
+bin/system3-backup doctor --linux-adapter
 ```
 
 ## Bootstrap a local install surface
@@ -36,7 +36,14 @@ bin/system3-backup-doctor --linux-adapter
 Run:
 
 ```bash
-bin/system3-backup-install-linux
+bin/system3-backup install --platform linux
+```
+
+For a non-writing install preview:
+
+```bash
+bin/system3-backup install --platform linux --plan
+bin/system3-backup install --platform linux --plan --json
 ```
 
 By default this creates:
@@ -90,7 +97,7 @@ At minimum:
 
 ```bash
 SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
-  bin/system3-backup-backup --check-config
+  bin/system3-backup backup --check-config
 ```
 
 ## Enable the scheduler
@@ -113,7 +120,7 @@ Generate the dashboard manually:
 
 ```bash
 SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
-  bin/system3-backup-dashboard
+  bin/system3-backup dashboard
 ```
 
 Then open:
@@ -128,14 +135,14 @@ For a lightweight operator-facing status readout:
 
 ```bash
 SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
-  bin/system3-backup-status
+  bin/system3-backup status
 ```
 
 For machine-readable status:
 
 ```bash
 SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
-  bin/system3-backup-status --json
+  bin/system3-backup status --json
 ```
 
 ## Scope

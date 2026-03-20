@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+usage() {
+    cat <<EOF
+Usage: system3-backup <command> [options]
+
+Public CLI front door for backup-chassis.
+
+Commands:
+  doctor [args]                    Run dependency and adapter checks
+  install [--platform macos|linux] Bootstrap a local install surface
+  backup [args]                    Run a backup
+  verify [args]                    Run integrity / restore-proof verification
+  status [--json]                  Show operator-facing backup status
+  dashboard [args]                 Render the local HTML dashboard
+  smoke-test [--platform ...]      Run the platform smoke test
+  help                             Show this help
+
+Examples:
+  bin/system3-backup doctor
+  bin/system3-backup install --plan
+  bin/system3-backup install --platform linux --json --plan
+  bin/system3-backup status --json
+  bin/system3-backup smoke-test
+EOF
+}
+
+detect_platform() {
+    case "$(uname -s)" in
+        Darwin)
+            printf 'macos\n'
+            ;;
+        Linux)
+            printf 'linux\n'
+            ;;
+        *)
+            echo "Unsupported platform: $(uname -s)" >&2
+            exit 2
+            ;;
+    esac
+}
+
+dispatch_platform_command() {
+    local command="$1"
+    shift
+
+    local platform=""
+    local target_script=""
+
+    if [[ $# -gt 0 ]]; then
+        case "$1" in
+            macos|linux)
+                platform="$1"
+                shift
+                ;;
+            --platform)
+                if [[ $# -lt 2 ]]; then
+                    echo "--platform requires a value" >&2
+                    exit 2
+                fi
+                platform="$2"
+                shift 2
+                ;;
+        esac
+    fi
+
+    if [[ -z "$platform" ]]; then
+        platform="$(detect_platform)"
+    fi
+
+    case "$command:$platform" in
+        install:macos)
+            target_script="$REPO_ROOT/bin/system3-backup-install-macos"
+            ;;
+        install:linux)
+            target_script="$REPO_ROOT/bin/system3-backup-install-linux"
+            ;;
+        smoke-test:macos)
+            target_script="$REPO_ROOT/bin/system3-backup-smoke-test"
+            ;;
+        smoke-test:linux)
+            target_script="$REPO_ROOT/bin/system3-backup-linux-smoke-test"
+            ;;
+        *)
+            echo "Unsupported platform for $command: $platform" >&2
+            exit 2
+            ;;
+    esac
+
+    exec "$target_script" "$@"
+}
+
+command_name="${1:-help}"
+if [[ $# -gt 0 ]]; then
+    shift
+fi
+
+case "$command_name" in
+    doctor)
+        exec "$REPO_ROOT/bin/system3-backup-doctor" "$@"
+        ;;
+    install)
+        dispatch_platform_command install "$@"
+        ;;
+    backup)
+        exec "$REPO_ROOT/bin/system3-backup-backup" "$@"
+        ;;
+    verify)
+        exec "$REPO_ROOT/bin/system3-backup-verify" "$@"
+        ;;
+    status)
+        exec "$REPO_ROOT/bin/system3-backup-status" "$@"
+        ;;
+    dashboard)
+        exec "$REPO_ROOT/bin/system3-backup-dashboard" "$@"
+        ;;
+    smoke-test)
+        dispatch_platform_command smoke-test "$@"
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        echo "Unknown command: $command_name" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
