@@ -217,6 +217,7 @@ bin/system3-backup help
 bin/system3-backup doctor
 bin/system3-backup install --plan
 bin/system3-backup install --platform linux --plan --json
+bin/system3-backup install --warn-after-seconds 86400 --critical-after-seconds 172800
 bin/system3-backup backup --check-config
 bin/system3-backup status --json
 bin/system3-backup verify --force
@@ -228,6 +229,12 @@ The install command is now programmatic:
 - `--plan` prints what would be created without writing files
 - `--json` emits machine-readable output for agents and wrappers
 - `install` dispatches to the current platform by default, or accepts `--platform macos|linux`
+- `--warn-after-seconds` defaults to `86400` (`24h`)
+- `--critical-after-seconds` defaults to `172800` (`48h`)
+
+Those backup-age thresholds are explicit because laptops sleep and shut down.
+The default policy should stay quiet for normal offline gaps and only escalate
+after a full day without a completed backup.
 
 ## License
 

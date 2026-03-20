@@ -64,6 +64,17 @@ bin/system3-backup install --plan --json
 That prints the exact output paths and whether each file would be written or
 preserved before anything touches the machine.
 
+The installer also exposes explicit backup-age thresholds:
+
+```bash
+bin/system3-backup install \
+  --warn-after-seconds 86400 \
+  --critical-after-seconds 172800
+```
+
+Those default to `24h` warning and `48h` critical so a laptop that sleeps or
+shuts down overnight does not throw an alarm too early.
+
 That creates, without overwriting existing files unless you pass `--force`:
 
 - `~/.config/system3-backup/system3-backup.env`
@@ -101,6 +112,7 @@ In `system3-backup.env`, set:
 - restic repository and the credential vars for your chosen backend
 - `SYSTEM3_BACKUP_REQUIRED_RUNTIME_ENV_VARS` if your backend needs env vars beyond the runtime defaults
 - state and log directories
+- `SYSTEM3_BACKUP_WARN_AFTER_SECONDS` and `SYSTEM3_BACKUP_CRITICAL_AFTER_SECONDS` if you want a different idle-backup warning ladder
 - `SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH` only if you want to override the default matching behavior; if left blank, the first configured backup path is used automatically
 
 ## 4. Check config before first run

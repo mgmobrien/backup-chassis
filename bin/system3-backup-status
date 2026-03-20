@@ -57,6 +57,9 @@ print(data.get("status_detail", ""))
 snapshot = data.get("latest_full_snapshot", "")
 if snapshot:
     print(f"Snapshot {snapshot}")
+next_run = data.get("next_run_detail", "")
+if next_run:
+    print(f"Next automatic run: {next_run}")
 print(f"Verification: {data.get('verify_text', 'No verification record')}")
 PY
 fi

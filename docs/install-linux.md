@@ -46,6 +46,18 @@ bin/system3-backup install --platform linux --plan
 bin/system3-backup install --platform linux --plan --json
 ```
 
+The install surface also exposes explicit backup-age thresholds:
+
+```bash
+bin/system3-backup install --platform linux \
+  --warn-after-seconds 86400 \
+  --critical-after-seconds 172800
+```
+
+Those default to `24h` warning and `48h` critical so a laptop or workstation
+that sleeps, suspends, or shuts down overnight does not raise a false alarm
+too early.
+
 By default this creates:
 
 - config: `~/.config/system3-backup/`
@@ -91,6 +103,7 @@ At minimum:
 - set `RESTIC_REPOSITORY`
 - set backend credentials
 - set `RESTIC_PASSWORD`
+- adjust `SYSTEM3_BACKUP_WARN_AFTER_SECONDS` and `SYSTEM3_BACKUP_CRITICAL_AFTER_SECONDS` if you want a different warning ladder
 - list the paths you actually want to back up
 
 ## Re-check before enabling the timer

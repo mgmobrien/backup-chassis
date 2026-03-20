@@ -107,17 +107,34 @@ export SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH="$SNAPSHOT_MATCH_PATH"
 export SYSTEM3_BACKUP_BACKUP_PID="$BACKUP_PID"
 export SYSTEM3_BACKUP_VERIFY_PID="$VERIFY_PID"
 export SYSTEM3_BACKUP_MISSING_CREDENTIALS="$(IFS=,; echo "${MISSING_CREDENTIAL_VARS[*]}")"
+export SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS="${SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS:-0}"
+export SYSTEM3_BACKUP_WARN_AFTER_SECONDS="${SYSTEM3_BACKUP_WARN_AFTER_SECONDS:-86400}"
+export SYSTEM3_BACKUP_CRITICAL_AFTER_SECONDS="${SYSTEM3_BACKUP_CRITICAL_AFTER_SECONDS:-172800}"
 
 python3 <<'PY'
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 display_name = os.environ.get("SYSTEM3_BACKUP_DISPLAY_NAME", "Backup")
 match_path = (os.environ.get("SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH") or "").rstrip("/")
 backup_pid = os.environ.get("SYSTEM3_BACKUP_BACKUP_PID", "")
 verify_pid = os.environ.get("SYSTEM3_BACKUP_VERIFY_PID", "")
 missing_credentials = [item for item in os.environ.get("SYSTEM3_BACKUP_MISSING_CREDENTIALS", "").split(",") if item]
+try:
+    schedule_interval_s = int(os.environ.get("SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS", "0") or 0)
+except ValueError:
+    schedule_interval_s = 0
+try:
+    warn_after_s = int(os.environ.get("SYSTEM3_BACKUP_WARN_AFTER_SECONDS", "86400") or 86400)
+except ValueError:
+    warn_after_s = 86400
+try:
+    critical_after_s = int(os.environ.get("SYSTEM3_BACKUP_CRITICAL_AFTER_SECONDS", "172800") or 172800)
+except ValueError:
+    critical_after_s = 172800
+if critical_after_s < warn_after_s:
+    critical_after_s = warn_after_s
 
 try:
     status = json.loads(os.environ.get("SYSTEM3_BACKUP_STATUS_JSON", "{}"))
@@ -157,6 +174,17 @@ def age_label(dt):
         return f"{total_seconds // 3600}h ago"
     return f"{max(1, total_seconds // 86400)}d ago"
 
+def span_label(total_seconds):
+    total_seconds = max(0, int(total_seconds))
+    days = total_seconds // 86400
+    hours = (total_seconds % 86400) // 3600
+    minutes = (total_seconds % 3600) // 60
+    if days:
+        return f"{days}d {hours}h" if hours else f"{days}d"
+    if hours:
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    return f"{max(1, minutes)}m"
+
 def title_label(age):
     if not age:
         return ""
@@ -171,6 +199,34 @@ def fmt_next_attempt(value):
     if minutes >= 60:
         return f"in ~{minutes // 60}h {minutes % 60}m"
     return f"in ~{minutes}m"
+
+def next_run_time_label(dt):
+    if not dt:
+        return ""
+    local_dt = dt.astimezone()
+    hour = local_dt.strftime("%I").lstrip("0") or "0"
+    return f"{local_dt:%Y-%m-%d} {hour}:{local_dt:%M%p}"
+
+def next_run_label(dt):
+    if not dt:
+        return "scheduled"
+    diff_seconds = int((dt - now).total_seconds())
+    if abs(diff_seconds) < 300:
+        return "due now"
+    if diff_seconds > 0:
+        return f"in ~{span_label(diff_seconds)}"
+    return f"overdue by {span_label(-diff_seconds)}"
+
+def next_run_detail(dt):
+    if not dt:
+        return "scheduled"
+    label = next_run_label(dt)
+    when = next_run_time_label(dt)
+    if label == "due now":
+        return f"{label} (around {when})" if when else label
+    if label.startswith("overdue by"):
+        return f"{label} (was due around {when})" if when else label
+    return f"{label} (around {when})" if when else label
 
 def snapshot_matches(snapshot):
     paths = [path.rstrip("/") for path in snapshot.get("paths", [])]
@@ -203,6 +259,24 @@ if status_completed_dt:
     latest_full_age = age_label(latest_full_dt)
     latest_full_time = status.get("completed_at", latest_full_time)
     latest_full_age_h = max(0, int((now - latest_full_dt).total_seconds() / 3600))
+
+latest_full_age_s = None
+if latest_full_dt:
+    latest_full_age_s = max(0, int((now - latest_full_dt).total_seconds()))
+
+next_run_dt = None
+next_run_time = ""
+next_run_label_text = "scheduled"
+next_run_detail_text = "scheduled"
+if latest_full_dt and schedule_interval_s > 0:
+    next_run_dt = latest_full_dt + timedelta(seconds=schedule_interval_s)
+    next_run_time = next_run_time_label(next_run_dt)
+    next_run_label_text = next_run_label(next_run_dt)
+    next_run_detail_text = next_run_detail(next_run_dt)
+
+backup_timing_detail = f"Last full backup {latest_full_age}"
+if next_run_dt:
+    backup_timing_detail = f"{backup_timing_detail} · next automatic run {next_run_label_text}"
 
 verify_state = verify.get("state", "")
 verify_detail = verify.get("detail", "")
@@ -249,64 +323,83 @@ next_attempt_raw = status.get("next_attempt", "")
 status_next_attempt = fmt_next_attempt(next_attempt_raw)
 is_uploading = bool(backup_pid) and current_state in ("uploading", "starting")
 
+status_code = "backup_overdue"
 status_health = "critical"
 status_text = "Backup overdue"
-status_detail = f"Last full backup {latest_full_age}"
+status_detail = backup_timing_detail
 
 if missing_credentials:
+    status_code = "missing_credentials"
     status_health = "critical"
     status_text = "Missing credentials"
     status_detail = ", ".join(missing_credentials)
 elif is_uploading:
+    status_code = "backup_running"
     status_health = "running"
     pct = int(status.get("pct", 0) or 0)
     status_text = "Backup running"
     status_detail = f"{pct}% complete"
 elif verify_health == "running":
+    status_code = "verification_running"
     status_health = "running"
     status_text = "Verification running"
     status_detail = verify_detail_text
 elif current_state == "maintenance_warning":
+    status_code = "maintenance_warning"
     status_health = "warning"
     status_text = "Maintenance warning"
     status_detail = f"Snapshot succeeded, cleanup failed · retry {status_next_attempt}"
 elif current_state == "waiting_for_network":
+    status_code = "waiting_for_network"
     status_health = "warning"
     status_text = "Waiting for network"
     status_detail = f"Storage unreachable on last attempt · retry {status_next_attempt}"
 elif current_state == "retry_pending":
+    status_code = "retry_pending"
     status_health = "warning"
     last_progress = status.get("last_progress", "")
     progress_detail = f"last progress {last_progress}" if last_progress else "backup attempt failed"
     status_text = "Retry pending"
     status_detail = f"{progress_detail} · retry {status_next_attempt}"
 elif not latest_full:
+    status_code = "no_full_backup"
     status_health = "critical"
     status_text = "No full backup"
     status_detail = "No completed primary snapshot exists yet"
 elif verify_health == "failed":
+    status_code = "verification_failed"
     status_health = "critical"
     status_text = "Verification failed"
     status_detail = verify_detail_text
-elif latest_full_age_h is not None and latest_full_age_h < 8 and verify_health == "ok":
+elif latest_full_age_s is not None and latest_full_age_s < warn_after_s and verify_health == "ok":
+    status_code = "healthy"
     status_health = "ok"
     status_text = "Healthy"
-    status_detail = f"Last full backup {latest_full_age} · {verify_detail_text}"
-elif latest_full_age_h is not None and latest_full_age_h < 8:
+    status_detail = backup_timing_detail
+elif latest_full_age_s is not None and latest_full_age_s < warn_after_s:
+    status_code = "backup_proof_stale"
     status_health = "warning"
-    status_text = "Backup fresh, proof stale"
-    status_detail = verify_detail_text
-elif latest_full_age_h is not None and latest_full_age_h < 24:
+    status_text = "Backup healthy, proof stale"
+    status_detail = backup_timing_detail
+elif latest_full_age_s is not None and latest_full_age_s < critical_after_s and verify_health == "ok":
+    status_code = "backup_delayed"
     status_health = "warning"
-    status_text = "Backup stale"
-    status_detail = f"Last full backup {latest_full_age}"
+    status_text = "Backup delayed"
+    status_detail = backup_timing_detail
+elif latest_full_age_s is not None and latest_full_age_s < critical_after_s:
+    status_code = "backup_delayed_proof_stale"
+    status_health = "warning"
+    status_text = "Backup delayed, proof stale"
+    status_detail = backup_timing_detail
 else:
+    status_code = "backup_overdue"
     status_health = "critical"
     status_text = "Backup overdue"
-    status_detail = f"Last full backup {latest_full_age}"
+    status_detail = backup_timing_detail
 
 result = {
     "display_name": display_name,
+    "status_code": status_code,
     "status_health": status_health,
     "status_text": status_text,
     "status_detail": status_detail,
@@ -327,6 +420,12 @@ result = {
     "latest_full_age_hours": latest_full_age_h,
     "latest_full_title": title_label(latest_full_age),
     "latest_full_time": latest_full_time,
+    "next_run_time": next_run_time,
+    "next_run_label": next_run_label_text,
+    "next_run_detail": next_run_detail_text,
+    "schedule_interval_seconds": schedule_interval_s,
+    "warn_after_seconds": warn_after_s,
+    "critical_after_seconds": critical_after_s,
     "backup_running": bool(backup_pid),
     "verify_running": bool(verify_pid),
     "missing_credentials": missing_credentials,

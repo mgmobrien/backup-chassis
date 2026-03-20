@@ -20,6 +20,8 @@ STORAGE_URL="${SYSTEM3_BACKUP_STORAGE_URL:-}"
 BACKUP_PROCESS_MATCH="${SYSTEM3_BACKUP_BACKUP_PROCESS_MATCH:-restic backup}"
 BACKUP_PID_FILE="$SYSTEM3_BACKUP_PID_FILE"
 VERIFY_PID_FILE="$SYSTEM3_BACKUP_VERIFY_PID_FILE"
+WARNING_TEXT_COLOR="#9A5B00"
+CRITICAL_TEXT_COLOR="#C2342C"
 
 pid_from_file() {
     local pid_file="$1"
@@ -87,6 +89,7 @@ except Exception:
 
 for key in (
     "status_health",
+    "status_code",
     "status_text",
     "status_detail",
     "verify_health",
@@ -99,6 +102,9 @@ for key in (
     "latest_full_present",
     "latest_full_age_hours",
     "latest_full_title",
+    "next_run_detail",
+    "next_run_label",
+    "next_run_time",
 ):
     value = data.get(key, "")
     if isinstance(value, bool):
@@ -110,18 +116,22 @@ for key in (
 PY
 )"
 SUMMARY_STATUS_HEALTH="$(echo "$SUMMARY_INFO" | sed -n '1p')"
-SUMMARY_STATUS_TEXT="$(echo "$SUMMARY_INFO" | sed -n '2p')"
-SUMMARY_STATUS_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '3p')"
-SUMMARY_VERIFY_HEALTH="$(echo "$SUMMARY_INFO" | sed -n '4p')"
-SUMMARY_VERIFY_TEXT="$(echo "$SUMMARY_INFO" | sed -n '5p')"
-SUMMARY_VERIFY_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '6p')"
-SUMMARY_VERIFY_CHECK_AGE="$(echo "$SUMMARY_INFO" | sed -n '7p')"
-SUMMARY_VERIFY_RESTORE_AGE="$(echo "$SUMMARY_INFO" | sed -n '8p')"
-SUMMARY_LATEST_FULL_AGE="$(echo "$SUMMARY_INFO" | sed -n '9p')"
-SUMMARY_LATEST_FULL_SNAPSHOT="$(echo "$SUMMARY_INFO" | sed -n '10p')"
-SUMMARY_LATEST_FULL_PRESENT="$(echo "$SUMMARY_INFO" | sed -n '11p')"
-SUMMARY_LATEST_FULL_HOURS="$(echo "$SUMMARY_INFO" | sed -n '12p')"
-SUMMARY_LATEST_FULL_TITLE="$(echo "$SUMMARY_INFO" | sed -n '13p')"
+SUMMARY_STATUS_CODE="$(echo "$SUMMARY_INFO" | sed -n '2p')"
+SUMMARY_STATUS_TEXT="$(echo "$SUMMARY_INFO" | sed -n '3p')"
+SUMMARY_STATUS_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '4p')"
+SUMMARY_VERIFY_HEALTH="$(echo "$SUMMARY_INFO" | sed -n '5p')"
+SUMMARY_VERIFY_TEXT="$(echo "$SUMMARY_INFO" | sed -n '6p')"
+SUMMARY_VERIFY_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '7p')"
+SUMMARY_VERIFY_CHECK_AGE="$(echo "$SUMMARY_INFO" | sed -n '8p')"
+SUMMARY_VERIFY_RESTORE_AGE="$(echo "$SUMMARY_INFO" | sed -n '9p')"
+SUMMARY_LATEST_FULL_AGE="$(echo "$SUMMARY_INFO" | sed -n '10p')"
+SUMMARY_LATEST_FULL_SNAPSHOT="$(echo "$SUMMARY_INFO" | sed -n '11p')"
+SUMMARY_LATEST_FULL_PRESENT="$(echo "$SUMMARY_INFO" | sed -n '12p')"
+SUMMARY_LATEST_FULL_HOURS="$(echo "$SUMMARY_INFO" | sed -n '13p')"
+SUMMARY_LATEST_FULL_TITLE="$(echo "$SUMMARY_INFO" | sed -n '14p')"
+SUMMARY_NEXT_RUN_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '15p')"
+SUMMARY_NEXT_RUN_LABEL="$(echo "$SUMMARY_INFO" | sed -n '16p')"
+SUMMARY_NEXT_RUN_TIME="$(echo "$SUMMARY_INFO" | sed -n '17p')"
 
 RESTIC_PID=""
 RESTIC_PID="$(pid_from_file "$BACKUP_PID_FILE" || true)"
@@ -181,23 +191,25 @@ elif [[ "$SUMMARY_STATUS_HEALTH" == "running" && "$SUMMARY_STATUS_TEXT" == "Veri
     echo "verify | sfimage=checkmark.shield.fill sfcolor=007AFF"
 elif [[ "$LAUNCHD_LOADED" -eq 0 ]]; then
     echo "pause | sfimage=pause.circle.fill sfcolor=FF9500"
-elif [[ "$SUMMARY_STATUS_TEXT" == "Maintenance warning" ]]; then
+elif [[ "$SUMMARY_STATUS_CODE" == "maintenance_warning" ]]; then
     echo "warn | sfimage=exclamationmark.triangle.fill sfcolor=FF9500"
-elif [[ "$SUMMARY_STATUS_TEXT" == "Waiting for network" ]]; then
+elif [[ "$SUMMARY_STATUS_CODE" == "waiting_for_network" ]]; then
     echo "net | sfimage=wifi.slash sfcolor=FF9500"
-elif [[ "$SUMMARY_STATUS_TEXT" == "Retry pending" ]]; then
+elif [[ "$SUMMARY_STATUS_CODE" == "retry_pending" ]]; then
     echo "retry | sfimage=arrow.clockwise sfcolor=FF9500"
-elif [[ "$SUMMARY_STATUS_TEXT" == "No full backup" ]]; then
+elif [[ "$SUMMARY_STATUS_CODE" == "no_full_backup" ]]; then
     echo "none | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
 else
-    if [[ "$SUMMARY_STATUS_TEXT" == "Verification failed" ]]; then
+    if [[ "$SUMMARY_STATUS_CODE" == "verification_failed" ]]; then
         echo "fail | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
     elif [[ "$SUMMARY_STATUS_HEALTH" == "ok" ]]; then
         echo "| sfimage=checkmark.circle.fill sfcolor=34C759"
-    elif [[ "$SUMMARY_STATUS_TEXT" == "Backup fresh, proof stale" ]]; then
+    elif [[ "$SUMMARY_STATUS_CODE" == "backup_proof_stale" || "$SUMMARY_STATUS_CODE" == "backup_delayed_proof_stale" ]]; then
         echo "proof | sfimage=exclamationmark.triangle.fill sfcolor=FF9500"
-    elif [[ "$SUMMARY_STATUS_TEXT" == "Backup stale" ]]; then
-        echo "${SUMMARY_LATEST_FULL_TITLE:-stale} | sfimage=clock.fill sfcolor=FF9500"
+    elif [[ "$SUMMARY_STATUS_CODE" == "backup_delayed" ]]; then
+        echo "late | sfimage=clock.fill sfcolor=FF9500"
+    elif [[ "$SUMMARY_STATUS_CODE" == "backup_overdue" ]]; then
+        echo "fix | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
     else
         echo "${SUMMARY_LATEST_FULL_TITLE:-old} | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
     fi
@@ -272,7 +284,7 @@ elif [[ "$SUMMARY_STATUS_HEALTH" == "running" && "$SUMMARY_STATUS_TEXT" == "Veri
     echo "  ${SUMMARY_STATUS_DETAIL} | size=13"
 elif [[ "$LAUNCHD_LOADED" -eq 0 ]]; then
     echo "Backups paused | color=#FF9500 size=14"
-elif [[ "$SUMMARY_STATUS_TEXT" == "Maintenance warning" ]]; then
+elif [[ "$SUMMARY_STATUS_CODE" == "maintenance_warning" ]]; then
     DETAIL="$(
         python3 - "$STATUS_FILE" <<'PY'
 import json
@@ -301,14 +313,14 @@ else:
 print(f"{failures} consecutive failure(s)")
 PY
     )"
-    echo "Snapshot completed, cleanup warning | color=#FF9500 size=14"
+    echo "Snapshot completed, cleanup warning | color=${WARNING_TEXT_COLOR} size=14"
     if [[ "$SUMMARY_LATEST_FULL_PRESENT" == "yes" ]]; then
         echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
     echo "  Retention cleanup failed after snapshot creation | size=13"
     echo "  $(echo "$DETAIL" | sed -n '1p') | size=13 color=#888"
     echo "  $(echo "$DETAIL" | sed -n '2p') | size=13 color=#888"
-elif [[ "$SUMMARY_STATUS_TEXT" == "Waiting for network" ]]; then
+elif [[ "$SUMMARY_STATUS_CODE" == "waiting_for_network" ]]; then
     DETAIL="$(
         python3 - "$STATUS_FILE" <<'PY'
 import json
@@ -341,13 +353,13 @@ else:
 print(f"{failures} consecutive failure(s)")
 PY
     )"
-    echo "Waiting for network | color=#FF9500 size=14"
+    echo "Waiting for network | color=${WARNING_TEXT_COLOR} size=14"
     if [[ "$SUMMARY_LATEST_FULL_PRESENT" == "yes" ]]; then
         echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
     echo "  $(echo "$DETAIL" | sed -n '1p') | size=13"
     echo "  $(echo "$DETAIL" | sed -n '2p') | size=13 color=#888"
-elif [[ "$SUMMARY_STATUS_TEXT" == "Retry pending" ]]; then
+elif [[ "$SUMMARY_STATUS_CODE" == "retry_pending" ]]; then
     DETAIL="$(
         python3 - "$STATUS_FILE" <<'PY'
 import json
@@ -377,30 +389,68 @@ else:
 print(f"{failures} consecutive failure(s)")
 PY
     )"
-    echo "Backup failed, will retry | color=#FF9500 size=14"
+    echo "Backup failed, will retry | color=${WARNING_TEXT_COLOR} size=14"
     if [[ "$SUMMARY_LATEST_FULL_PRESENT" == "yes" ]]; then
         echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
     echo "  $(echo "$DETAIL" | sed -n '1p') | size=13"
     echo "  $(echo "$DETAIL" | sed -n '2p') | size=13 color=#888"
-elif [[ "$SUMMARY_STATUS_TEXT" == "No full backup" ]]; then
+elif [[ "$SUMMARY_STATUS_CODE" == "no_full_backup" ]]; then
     echo "No full backup exists | color=#FF3B30 size=14"
+elif [[ "$SUMMARY_STATUS_CODE" == "backup_delayed" || "$SUMMARY_STATUS_CODE" == "backup_delayed_proof_stale" ]]; then
+    echo "${DISPLAY_NAME} status: waiting for next automatic run | color=${WARNING_TEXT_COLOR} size=14"
+    if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
+        echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
+    fi
+    if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
+        echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
+    fi
+    echo "  No failure is recorded. This usually catches up on the next wake or scheduled cycle. | size=13 color=#666"
+    if [[ "$SUMMARY_STATUS_CODE" == "backup_delayed_proof_stale" ]]; then
+        echo "  Integrity check: ${VERIFY_CHECK_AGE} | size=13"
+        echo "  Restore drill: ${VERIFY_RESTORE_AGE} | size=13"
+    fi
+elif [[ "$SUMMARY_STATUS_CODE" == "backup_overdue" ]]; then
+    echo "${DISPLAY_NAME} status: action recommended | color=${CRITICAL_TEXT_COLOR} size=14"
+    if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
+        echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
+    fi
+    if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
+        echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
+    fi
+    echo "  No active failure is recorded, but backup age is past the quiet window. | size=13 color=#666"
 else
-    if [[ "$SUMMARY_STATUS_TEXT" == "Verification failed" ]]; then
-        echo "${DISPLAY_NAME} status: verification failed | color=#FF3B30 size=14"
+    if [[ "$SUMMARY_STATUS_CODE" == "verification_failed" ]]; then
+        echo "${DISPLAY_NAME} status: verification failed | color=${CRITICAL_TEXT_COLOR} size=14"
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
             echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
         fi
         echo "  ${SUMMARY_STATUS_DETAIL} | size=13"
     elif [[ "$SUMMARY_STATUS_HEALTH" == "ok" ]]; then
         echo "${DISPLAY_NAME} status: verified (${SUMMARY_LATEST_FULL_AGE}) | size=14"
+        if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
+            echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
+        fi
         echo "  Integrity check: ${VERIFY_CHECK_AGE} | size=13"
         echo "  Restore drill: ${VERIFY_RESTORE_AGE} | size=13"
         echo "  Snapshot ${SUMMARY_LATEST_FULL_SNAPSHOT} | font=Menlo size=12 color=#888"
-    else
-        echo "${DISPLAY_NAME} status: ${SUMMARY_STATUS_TEXT} | color=#FF9500 size=14"
+    elif [[ "$SUMMARY_STATUS_CODE" == "backup_proof_stale" ]]; then
+        echo "${DISPLAY_NAME} status: backup healthy, proof stale | color=${WARNING_TEXT_COLOR} size=14"
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
             echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
+        fi
+        if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
+            echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
+        fi
+        echo "  Integrity check: ${VERIFY_CHECK_AGE} | size=13"
+        echo "  Restore drill: ${VERIFY_RESTORE_AGE} | size=13"
+    else
+        echo "${DISPLAY_NAME} status: ${SUMMARY_STATUS_TEXT} | color=${WARNING_TEXT_COLOR} size=14"
+        if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
+            echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
+        fi
+        if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
+            echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
         fi
         echo "  Integrity check: ${VERIFY_CHECK_AGE} | size=13"
         echo "  Restore drill: ${VERIFY_RESTORE_AGE} | size=13"
@@ -417,13 +467,54 @@ if [[ "$UPLOAD_STATE" == "running" ]]; then
 elif [[ "$UPLOAD_STATE" == "paused" ]]; then
     echo "Resume upload | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "pkill -CONT -f \"$BACKUP_PROCESS_MATCH\"") terminal=false refresh=true color=#34C759"
 else
-    echo "Run backup now | bash=$BACKUP_COMMAND terminal=true refresh=true"
+    PRIMARY_ACTION_KIND="backup"
+    PRIMARY_ACTION_LABEL="Run backup now"
+    PRIMARY_ACTION_COMMAND="$BACKUP_COMMAND"
+    PRIMARY_ACTION_PARAM1=""
+    PRIMARY_ACTION_PARAM2=""
+    PRIMARY_ACTION_TERMINAL="true"
+    PRIMARY_ACTION_COLOR=""
+
+    if [[ "$LAUNCHD_LOADED" -eq 0 && -n "$SCHEDULER_PLIST" ]]; then
+        PRIMARY_ACTION_KIND="schedule"
+        PRIMARY_ACTION_LABEL="Fix now: Resume automatic backups"
+        PRIMARY_ACTION_COMMAND="/bin/bash"
+        PRIMARY_ACTION_PARAM1="-lc"
+        PRIMARY_ACTION_PARAM2="$(swiftbar_shell_command "launchctl load \"$SCHEDULER_PLIST\"")"
+        PRIMARY_ACTION_TERMINAL="false"
+        PRIMARY_ACTION_COLOR=" color=#34C759"
+    elif [[ "$SUMMARY_STATUS_CODE" == "backup_proof_stale" || "$SUMMARY_STATUS_CODE" == "backup_delayed_proof_stale" || "$SUMMARY_STATUS_CODE" == "verification_failed" ]]; then
+        PRIMARY_ACTION_KIND="verify"
+        PRIMARY_ACTION_LABEL="Fix now: Run verification now"
+        PRIMARY_ACTION_COMMAND="$VERIFY_COMMAND"
+        PRIMARY_ACTION_PARAM1="--force"
+        PRIMARY_ACTION_COLOR=" color=#34C759"
+    elif [[ "$SUMMARY_STATUS_CODE" == "backup_delayed" || "$SUMMARY_STATUS_CODE" == "backup_overdue" || "$SUMMARY_STATUS_CODE" == "retry_pending" || "$SUMMARY_STATUS_CODE" == "waiting_for_network" ]]; then
+        PRIMARY_ACTION_LABEL="Fix now: Run backup now"
+        PRIMARY_ACTION_COLOR=" color=#34C759"
+    elif [[ "$SUMMARY_STATUS_CODE" == "no_full_backup" ]]; then
+        PRIMARY_ACTION_LABEL="Fix now: Run first backup"
+        PRIMARY_ACTION_COLOR=" color=#34C759"
+    fi
+
+    if [[ -n "$PRIMARY_ACTION_PARAM2" ]]; then
+        echo "${PRIMARY_ACTION_LABEL} | bash=${PRIMARY_ACTION_COMMAND} param1=${PRIMARY_ACTION_PARAM1} param2=${PRIMARY_ACTION_PARAM2} terminal=${PRIMARY_ACTION_TERMINAL} refresh=true${PRIMARY_ACTION_COLOR}"
+    elif [[ -n "$PRIMARY_ACTION_PARAM1" ]]; then
+        echo "${PRIMARY_ACTION_LABEL} | bash=${PRIMARY_ACTION_COMMAND} param1=${PRIMARY_ACTION_PARAM1} terminal=${PRIMARY_ACTION_TERMINAL} refresh=true${PRIMARY_ACTION_COLOR}"
+    else
+        echo "${PRIMARY_ACTION_LABEL} | bash=${PRIMARY_ACTION_COMMAND} terminal=${PRIMARY_ACTION_TERMINAL} refresh=true${PRIMARY_ACTION_COLOR}"
+    fi
 fi
 
 echo "---"
 
 if [[ "$UPLOAD_STATE" == "none" ]]; then
-    echo "Run verification now | bash=$VERIFY_COMMAND param1=--force terminal=true refresh=true"
+    if [[ "${PRIMARY_ACTION_KIND:-backup}" != "backup" ]]; then
+        echo "Run backup now | bash=$BACKUP_COMMAND terminal=true refresh=true"
+    fi
+    if [[ "${PRIMARY_ACTION_KIND:-backup}" != "verify" ]]; then
+        echo "Run verification now | bash=$VERIFY_COMMAND param1=--force terminal=true refresh=true"
+    fi
     echo "---"
 fi
 
@@ -442,6 +533,9 @@ fi
 
 echo "Destination: ${SYSTEM3_BACKUP_STORAGE_LABEL} | size=13 color=#888"
 echo "Schedule: ${SYSTEM3_BACKUP_SCHEDULE_LABEL} | size=13 color=#888"
+if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" && "$UPLOAD_STATE" == "none" ]]; then
+    echo "Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13 color=#888"
+fi
 echo "Verification: ${SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS}d integrity + ${SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS}d restore canary | size=13 color=#888"
 echo "Encryption: ${SYSTEM3_BACKUP_ENCRYPTION_LABEL} | size=13 color=#888"
 

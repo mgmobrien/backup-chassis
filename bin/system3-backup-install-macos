@@ -16,6 +16,8 @@ SWIFTBAR_PLUGIN_PATH="$HOME/Library/Application Support/SwiftBar/Plugins/system3
 SERVICE_LABEL="com.system3.backup"
 DISPLAY_NAME="Backup"
 SCHEDULE_INTERVAL_SECONDS="14400"
+WARN_AFTER_SECONDS="86400"
+CRITICAL_AFTER_SECONDS="172800"
 FORCE="0"
 PLAN_ONLY="0"
 JSON_OUTPUT="0"
@@ -43,6 +45,8 @@ Options:
   --service-label LABEL              launchd service label
   --display-name NAME                Human-facing display name
   --schedule-interval-seconds N      launchd StartInterval value (default: $SCHEDULE_INTERVAL_SECONDS)
+  --warn-after-seconds N             Warning threshold for idle backups (default: $WARN_AFTER_SECONDS)
+  --critical-after-seconds N         Critical threshold for idle backups (default: $CRITICAL_AFTER_SECONDS)
   --plan                             Print the install plan without writing files
   --json                             Emit machine-readable output
   --force                            Overwrite existing generated files
@@ -92,6 +96,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --schedule-interval-seconds)
             SCHEDULE_INTERVAL_SECONDS="$2"
+            shift 2
+            ;;
+        --warn-after-seconds)
+            WARN_AFTER_SECONDS="$2"
+            shift 2
+            ;;
+        --critical-after-seconds)
+            CRITICAL_AFTER_SECONDS="$2"
             shift 2
             ;;
         --plan)
@@ -151,7 +163,7 @@ emit_summary_json() {
     local paths_action="$5"
     local excludes_action="$6"
 
-    python3 - "$mode" "$CONFIG_HOME" "$STATE_DIR" "$LOG_DIR" "$DASHBOARD_DIR" "$DASHBOARD_OUTPUT" "$SERVICE_LABEL" "$DISPLAY_NAME" "$SCHEDULE_INTERVAL_SECONDS" "$ENV_FILE" "$env_action" "$PATHS_FILE" "$paths_action" "$EXCLUDES_FILE" "$excludes_action" "$LAUNCH_AGENT_PATH" "$launch_agent_action" "$SWIFTBAR_PLUGIN_PATH" "$swiftbar_action" <<'PY'
+    python3 - "$mode" "$CONFIG_HOME" "$STATE_DIR" "$LOG_DIR" "$DASHBOARD_DIR" "$DASHBOARD_OUTPUT" "$SERVICE_LABEL" "$DISPLAY_NAME" "$SCHEDULE_INTERVAL_SECONDS" "$WARN_AFTER_SECONDS" "$CRITICAL_AFTER_SECONDS" "$ENV_FILE" "$env_action" "$PATHS_FILE" "$paths_action" "$EXCLUDES_FILE" "$excludes_action" "$LAUNCH_AGENT_PATH" "$launch_agent_action" "$SWIFTBAR_PLUGIN_PATH" "$swiftbar_action" <<'PY'
 import json
 import sys
 
@@ -165,6 +177,8 @@ import sys
     service_label,
     display_name,
     schedule_interval_seconds,
+    warn_after_seconds,
+    critical_after_seconds,
     env_file,
     env_action,
     paths_file,
@@ -183,6 +197,8 @@ data = {
     "display_name": display_name,
     "service_label": service_label,
     "schedule_interval_seconds": int(schedule_interval_seconds),
+    "warn_after_seconds": int(warn_after_seconds),
+    "critical_after_seconds": int(critical_after_seconds),
     "config_home": config_home,
     "state_dir": state_dir,
     "log_dir": log_dir,
@@ -288,6 +304,18 @@ if ! [[ "$SCHEDULE_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || [[ "$SCHEDULE_INTERVAL_SE
     echo "schedule interval must be a positive integer: $SCHEDULE_INTERVAL_SECONDS" >&2
     exit 2
 fi
+if ! [[ "$WARN_AFTER_SECONDS" =~ ^[0-9]+$ ]] || [[ "$WARN_AFTER_SECONDS" -le 0 ]]; then
+    echo "warn-after-seconds must be a positive integer: $WARN_AFTER_SECONDS" >&2
+    exit 2
+fi
+if ! [[ "$CRITICAL_AFTER_SECONDS" =~ ^[0-9]+$ ]] || [[ "$CRITICAL_AFTER_SECONDS" -le 0 ]]; then
+    echo "critical-after-seconds must be a positive integer: $CRITICAL_AFTER_SECONDS" >&2
+    exit 2
+fi
+if [[ "$CRITICAL_AFTER_SECONDS" -lt "$WARN_AFTER_SECONDS" ]]; then
+    echo "critical-after-seconds must be greater than or equal to warn-after-seconds" >&2
+    exit 2
+fi
 
 CONFIG_HOME="$(resolve_path "$CONFIG_HOME")"
 STATE_DIR="$(resolve_path "$STATE_DIR")"
@@ -388,6 +416,8 @@ SYSTEM3_BACKUP_CANARY_FILE="$CANARY_FILE"
 
 # Scheduling and retention
 SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS="$SCHEDULE_INTERVAL_SECONDS"
+SYSTEM3_BACKUP_WARN_AFTER_SECONDS="$WARN_AFTER_SECONDS"
+SYSTEM3_BACKUP_CRITICAL_AFTER_SECONDS="$CRITICAL_AFTER_SECONDS"
 SYSTEM3_BACKUP_FAIL_ALERT_THRESHOLD="3"
 SYSTEM3_BACKUP_NETWORK_CHECK_URL=""
 SYSTEM3_BACKUP_KEEP_DAILY="7"

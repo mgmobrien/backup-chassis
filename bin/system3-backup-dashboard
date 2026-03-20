@@ -266,6 +266,7 @@ status_failures = status_summary.get("failures", status_failures)
 status_next_attempt = status_summary.get("next_attempt_label", status_next_attempt)
 latest_full_age = status_summary.get("latest_full_age", latest_full_age)
 latest_full_present = bool(status_summary.get("latest_full_present", bool(latest_full)))
+next_run_detail = status_summary.get("next_run_detail", "scheduled")
 
 paths_html = "<br>\n  ".join(html.escape(item) for item in paths_text.splitlines() if item.strip())
 
@@ -353,7 +354,7 @@ print(f"""<!DOCTYPE html>
   <div class="card">
     <div class="card-label">Schedule</div>
     <div class="card-value">{html.escape(schedule_label)}</div>
-    <div class="card-detail">{html.escape(check_interval_days)}d integrity · {html.escape(restore_interval_days)}d restore</div>
+    <div class="card-detail">Next automatic run {html.escape(next_run_detail)} · {html.escape(check_interval_days)}d integrity · {html.escape(restore_interval_days)}d restore</div>
   </div>
 </div>
 """)
