@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/system3-backup-env.sh"
+system3_backup_load_env
+
+STATUS_DATA_COMMAND="${SYSTEM3_BACKUP_STATUS_DATA_COMMAND:-$SCRIPT_DIR/system3-backup-status-data}"
+BACKUP_COMMAND="${SYSTEM3_BACKUP_RUNTIME_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-backup}"
+VERIFY_COMMAND="${SYSTEM3_BACKUP_VERIFY_SCRIPT:-$SCRIPT_DIR/system3-backup-verify}"
+DASHBOARD_COMMAND="${SYSTEM3_BACKUP_DASHBOARD_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-dashboard}"
+DASHBOARD_OUTPUT="${SYSTEM3_BACKUP_DASHBOARD_OUTPUT:-$SYSTEM3_BACKUP_DASHBOARD_DIR/index.html}"
+NOTIFY_COMMAND="${SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT:-$SCRIPT_DIR/system3-backup-notify-linux}"
+DISPLAY_NAME="${SYSTEM3_BACKUP_DISPLAY_NAME:-Backup}"
+POLL_SECONDS="${SYSTEM3_BACKUP_LINUX_TRAY_POLL_SECONDS:-300}"
+PID_FILE="${SYSTEM3_BACKUP_STATUS_DIR}/linux-tray.pid"
+SELF_PATH="$SCRIPT_DIR/system3-backup-linux-tray"
+
+ACTION=""
+PRINT_PAYLOAD="0"
+
+usage() {
+    cat <<EOF
+Usage: system3-backup-linux-tray [options]
+
+Runs the optional Linux tray surface for backup-chassis.
+
+Options:
+  --poll-seconds N          Tray refresh cadence (default: $POLL_SECONDS)
+  --action NAME             Run a tray action (status, dashboard, backup, verify, log, quit)
+  --print-payload           Print the current tray icon, tooltip, and menu spec
+  -h, --help                Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --poll-seconds)
+            POLL_SECONDS="$2"
+            shift 2
+            ;;
+        --action)
+            ACTION="$2"
+            shift 2
+            ;;
+        --print-payload)
+            PRINT_PAYLOAD="1"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+if ! [[ "$POLL_SECONDS" =~ ^[0-9]+$ ]] || [[ "$POLL_SECONDS" -le 0 ]]; then
+    echo "poll-seconds must be a positive integer: $POLL_SECONDS" >&2
+    exit 2
+fi
+
+notify_message() {
+    local detail="$1"
+    local title="${2:-$DISPLAY_NAME}"
+
+    if [[ -x "$NOTIFY_COMMAND" ]]; then
+        "$NOTIFY_COMMAND" "$detail" "$title" >/dev/null 2>&1 || true
+    fi
+}
+
+find_latest_log() {
+    python3 - "$SYSTEM3_BACKUP_LOG_DIR" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+log_dir = Path(sys.argv[1]).expanduser()
+if not log_dir.exists():
+    raise SystemExit(0)
+
+candidates = [path for path in log_dir.iterdir() if path.is_file() and path.suffix == ".log"]
+if not candidates:
+    raise SystemExit(0)
+
+latest = max(candidates, key=lambda path: path.stat().st_mtime)
+print(str(latest))
+PY
+}
+
+open_path() {
+    local target="$1"
+    if command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$target" >/dev/null 2>&1 &
+    else
+        notify_message "Install xdg-open to open ${DISPLAY_NAME} files from the tray."
+    fi
+}
+
+run_background() {
+    nohup "$@" >/dev/null 2>&1 &
+}
+
+run_action() {
+    case "$1" in
+        status)
+            local payload
+            payload="$(build_payload)"
+            local tooltip=""
+            while IFS=$'\t' read -r key value; do
+                case "$key" in
+                    tooltip)
+                        tooltip="$value"
+                        ;;
+                esac
+            done <<< "$payload"
+            notify_message "${tooltip:-${DISPLAY_NAME} status unavailable}"
+            ;;
+        dashboard)
+            "$DASHBOARD_COMMAND" >/dev/null 2>&1 || true
+            open_path "$DASHBOARD_OUTPUT"
+            ;;
+        backup)
+            run_background "$BACKUP_COMMAND"
+            notify_message "Manual backup started." "$DISPLAY_NAME"
+            ;;
+        verify)
+            run_background "$VERIFY_COMMAND" --force
+            notify_message "Integrity check + restore drill started." "$DISPLAY_NAME"
+            ;;
+        log)
+            local latest_log
+            latest_log="$(find_latest_log || true)"
+            if [[ -n "$latest_log" ]]; then
+                open_path "$latest_log"
+            else
+                notify_message "No backup log is available yet." "$DISPLAY_NAME"
+            fi
+            ;;
+        quit)
+            local current_pid=""
+            if [[ -f "$PID_FILE" ]]; then
+                current_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+            fi
+            if [[ -n "$current_pid" ]] && kill -0 "$current_pid" 2>/dev/null; then
+                kill "$current_pid" 2>/dev/null || true
+            fi
+            ;;
+        *)
+            echo "Unknown tray action: $1" >&2
+            exit 2
+            ;;
+    esac
+}
+
+build_menu_spec() {
+    printf '%s' \
+        "Show status!$SELF_PATH --action status"\
+        "|Open dashboard!$SELF_PATH --action dashboard"\
+        "|Run backup now!$SELF_PATH --action backup"\
+        "|Run integrity check + restore drill!$SELF_PATH --action verify"\
+        "|Open latest backup log!$SELF_PATH --action log"\
+        "|Quit tray!$SELF_PATH --action quit"
+}
+
+build_payload() {
+    local summary_json=""
+    summary_json="$("$STATUS_DATA_COMMAND" 2>/dev/null || echo '{}')"
+    STATUS_SUMMARY_JSON="$summary_json" python3 <<'PY'
+import json
+import os
+
+try:
+    data = json.loads(os.environ.get("STATUS_SUMMARY_JSON", "{}"))
+except Exception:
+    data = {}
+
+display_name = data.get("display_name", "Backup")
+status_text = data.get("status_text", "Status unavailable")
+status_detail = data.get("status_detail", "")
+status_health = data.get("status_health", "critical")
+latest_age = data.get("latest_full_age", "")
+next_label = data.get("next_run_label", "")
+verify_check_age = data.get("verify_check_age", "")
+verify_restore_age = data.get("verify_restore_age", "")
+
+if status_health == "ok":
+    icon = "drive-harddisk"
+elif status_health == "running":
+    icon = "view-refresh"
+elif status_health == "warning":
+    icon = "dialog-warning"
+else:
+    icon = "dialog-error"
+
+parts = [f"{display_name}: {status_text}"]
+if status_detail:
+    parts.append(status_detail)
+if latest_age and latest_age != "none" and not status_detail:
+    if next_label:
+        parts.append(f"Last backup {latest_age} (next {next_label})")
+    else:
+        parts.append(f"Last backup {latest_age}")
+if verify_check_age and verify_check_age != "none":
+    parts.append(f"Integrity {verify_check_age}")
+if verify_restore_age and verify_restore_age != "none":
+    parts.append(f"Restore {verify_restore_age}")
+
+tooltip = " · ".join(parts)
+tooltip = tooltip.replace("\n", " ").replace("\t", " ").strip()
+
+print(f"icon\t{icon}")
+print(f"tooltip\t{tooltip}")
+PY
+}
+
+if [[ -n "$ACTION" ]]; then
+    run_action "$ACTION"
+    exit 0
+fi
+
+if [[ "$PRINT_PAYLOAD" == "1" ]]; then
+    build_payload
+    printf 'menu\t%s\n' "$(build_menu_spec)"
+    exit 0
+fi
+
+if [[ "$(uname -s)" != "Linux" ]]; then
+    echo "system3-backup-linux-tray requires Linux" >&2
+    exit 2
+fi
+
+if ! command -v yad >/dev/null 2>&1; then
+    echo "system3-backup-linux-tray requires yad" >&2
+    exit 1
+fi
+
+if [[ -f "$PID_FILE" ]]; then
+    existing_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ -n "${existing_pid:-}" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+        echo "${DISPLAY_NAME} tray already running (pid $existing_pid)" >&2
+        exit 0
+    fi
+fi
+
+echo "$$" > "$PID_FILE"
+cleanup() {
+    rm -f "$PID_FILE"
+}
+trap cleanup EXIT
+
+PAYLOAD="$(build_payload)"
+TRAY_ICON=""
+TRAY_TOOLTIP=""
+while IFS=$'\t' read -r key value; do
+    case "$key" in
+        icon)
+            TRAY_ICON="$value"
+            ;;
+        tooltip)
+            TRAY_TOOLTIP="$value"
+            ;;
+    esac
+done <<< "$PAYLOAD"
+TRAY_MENU="$(build_menu_spec)"
+
+(
+    while true; do
+        PAYLOAD="$(build_payload)"
+        while IFS=$'\t' read -r key value; do
+            case "$key" in
+                icon)
+                    printf 'icon:%s\n' "$value"
+                    ;;
+                tooltip)
+                    printf 'tooltip:%s\n' "$value"
+                    ;;
+            esac
+        done <<< "$PAYLOAD"
+        printf 'menu:%s\n' "$TRAY_MENU"
+        sleep "$POLL_SECONDS"
+    done
+) | yad \
+    --notification \
+    --listen \
+    --image="$TRAY_ICON" \
+    --text="$TRAY_TOOLTIP" \
+    --command="$SELF_PATH --action dashboard" \
+    --menu="$TRAY_MENU" \
+    --no-middle

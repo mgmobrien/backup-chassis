@@ -60,6 +60,8 @@ DASHBOARD_DIR="$TMP_ROOT/dashboard"
 SYSTEMD_USER_DIR="$TMP_ROOT/systemd-user"
 SYSTEMD_SERVICE_PATH="$SYSTEMD_USER_DIR/system3-backup.service"
 SYSTEMD_TIMER_PATH="$SYSTEMD_USER_DIR/system3-backup.timer"
+AUTOSTART_DIR="$TMP_ROOT/autostart"
+TRAY_DESKTOP_PATH="$AUTOSTART_DIR/system3-backup-tray.desktop"
 ENV_FILE="$CONFIG_HOME/system3-backup.env"
 PATHS_FILE="$CONFIG_HOME/paths.txt"
 SMOKE_DOCS="$TMP_ROOT/smoke-docs"
@@ -77,15 +79,18 @@ SYSTEM3_BACKUP_PLAN_JSON="$TMP_ROOT/install-plan.json"
     --systemd-user-dir "$SYSTEMD_USER_DIR" \
     --systemd-service-path "$SYSTEMD_SERVICE_PATH" \
     --systemd-timer-path "$SYSTEMD_TIMER_PATH" \
+    --autostart-dir "$AUTOSTART_DIR" \
+    --tray-desktop-path "$TRAY_DESKTOP_PATH" \
     --display-name "Backup smoke" \
+    --enable-tray \
     --plan \
     --json > "$SYSTEM3_BACKUP_PLAN_JSON"
 
-python3 - "$SYSTEM3_BACKUP_PLAN_JSON" "$ENV_FILE" "$SYSTEMD_SERVICE_PATH" <<'PY'
+python3 - "$SYSTEM3_BACKUP_PLAN_JSON" "$ENV_FILE" "$SYSTEMD_SERVICE_PATH" "$TRAY_DESKTOP_PATH" <<'PY'
 import json
 import sys
 
-plan_path, env_file, service_path = sys.argv[1:4]
+plan_path, env_file, service_path, tray_desktop_path = sys.argv[1:5]
 with open(plan_path) as handle:
     data = json.load(handle)
 
@@ -93,6 +98,7 @@ assert data["mode"] == "plan", data
 assert data["platform"] == "linux", data
 assert any(item["label"] == "env" and item["path"] == env_file for item in data["outputs"]), data
 assert any(item["label"] == "systemd_service" and item["path"] == service_path for item in data["outputs"]), data
+assert any(item["label"] == "tray_desktop" and item["path"] == tray_desktop_path for item in data["outputs"]), data
 PY
 
 "$REPO_ROOT/bin/system3-backup" install --platform linux \
@@ -103,7 +109,10 @@ PY
     --systemd-user-dir "$SYSTEMD_USER_DIR" \
     --systemd-service-path "$SYSTEMD_SERVICE_PATH" \
     --systemd-timer-path "$SYSTEMD_TIMER_PATH" \
+    --autostart-dir "$AUTOSTART_DIR" \
+    --tray-desktop-path "$TRAY_DESKTOP_PATH" \
     --display-name "Backup smoke" \
+    --enable-tray \
     --force
 
 cat > "$PATHS_FILE" <<EOF
@@ -176,6 +185,7 @@ echo "validate generated config"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-backup" --check-config > "$TMP_ROOT/check-config.txt"
 assert_contains "run_wrapper_script=$REPO_ROOT/bin/system3-backup-wrap-systemd-inhibit" "$TMP_ROOT/check-config.txt"
 assert_contains "failure_notify_script=$REPO_ROOT/bin/system3-backup-notify-linux" "$TMP_ROOT/check-config.txt"
+assert_contains "SYSTEM3_BACKUP_LINUX_TRAY_POLL_SECONDS=\"300\"" "$ENV_FILE"
 
 echo "render dashboard"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-dashboard" >/dev/null
@@ -208,11 +218,19 @@ PY
 echo "assert unit contents"
 assert_contains "ExecStart=$REPO_ROOT/bin/system3-backup-backup" "$SYSTEMD_SERVICE_PATH"
 assert_contains "OnUnitActiveSec=14400s" "$SYSTEMD_TIMER_PATH"
+assert_contains "Exec=env SYSTEM3_BACKUP_ENV_FILE=$ENV_FILE $REPO_ROOT/bin/system3-backup-linux-tray" "$TRAY_DESKTOP_PATH"
+
+echo "validate tray runtime"
+bash -n "$REPO_ROOT/bin/system3-backup-linux-tray"
+SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-linux-tray" --print-payload > "$TMP_ROOT/tray.txt"
+assert_contains "icon" "$TMP_ROOT/tray.txt"
+assert_contains "menu" "$TMP_ROOT/tray.txt"
 
 echo "check cli help"
 "$REPO_ROOT/bin/system3-backup" help > "$TMP_ROOT/help.txt"
 assert_contains "install [--platform macos|linux]" "$TMP_ROOT/help.txt"
 assert_contains "smoke-test [--platform ...]" "$TMP_ROOT/help.txt"
+assert_contains "tray [--platform linux]" "$TMP_ROOT/help.txt"
 
 cat <<EOF
 Linux smoke test passed.
@@ -221,4 +239,5 @@ Temp root: $TMP_ROOT
 Dashboard output: $DASHBOARD_DIR/index.html
 Service file: $SYSTEMD_SERVICE_PATH
 Timer file: $SYSTEMD_TIMER_PATH
+Tray desktop file: $TRAY_DESKTOP_PATH
 EOF

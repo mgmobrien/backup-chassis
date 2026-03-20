@@ -60,6 +60,8 @@ linux_required_commands=(
 linux_optional_commands=(
     systemd-inhibit
     notify-send
+    xdg-open
+    yad
 )
 
 macos_optional_commands=(
@@ -134,7 +136,11 @@ elif [[ "$MODE" == "linux-adapter" ]]; then
     else
         echo "  missing  bundled Linux notify adapter"
     fi
-    echo "  skipped   Linux tray integration checks"
+    if [[ -x "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/system3-backup-linux-tray" ]]; then
+        echo "  ok       bundled Linux tray adapter"
+    else
+        echo "  missing  bundled Linux tray adapter"
+    fi
 else
     for command_name in "${macos_optional_commands[@]}"; do
         if command -v "$command_name" >/dev/null 2>&1; then

@@ -52,7 +52,124 @@ Today this chassis supports:
 Adapter-specific requirements:
 
 - macOS: `launchctl`, `plutil`; SwiftBar is optional if you want the menubar surface
-- Linux: `systemctl`, `systemd-analyze`; `systemd-inhibit` and `notify-send` are optional for the richer Linux adapter path, and there is still no Linux tray surface yet
+- Linux: `systemctl`, `systemd-analyze`; `systemd-inhibit`, `notify-send`, `xdg-open`, and `yad` are optional for the richer Linux adapter path, including the tray surface
+
+## Quickstart
+
+If you want the shortest honest path:
+
+```bash
+bin/system3-backup doctor --portable-core
+bin/system3-backup install --plan
+bin/system3-backup install
+```
+
+Then fill in:
+
+- `~/.config/system3-backup/system3-backup.env`
+- `~/.config/system3-backup/paths.txt`
+- `~/.config/system3-backup/excludes.txt`
+
+Then validate and run:
+
+```bash
+SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
+  bin/system3-backup backup --check-config
+
+SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
+  bin/system3-backup backup
+
+SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
+  bin/system3-backup verify --force
+```
+
+## Backblaze B2 example
+
+Backblaze B2 is the current documented example because it is inexpensive,
+simple, and works cleanly through restic's S3-compatible path.
+
+Typical setup:
+
+1. Create a B2 bucket dedicated to backups.
+2. Create an application key scoped to that bucket.
+3. Put the bucket endpoint in `RESTIC_REPOSITORY`.
+4. Put the application key ID and application key in the S3-compatible env vars.
+5. Set a strong `RESTIC_PASSWORD`.
+
+Example env values:
+
+```bash
+RESTIC_REPOSITORY="s3:s3.us-west-000.backblazeb2.com/your-backup-bucket"
+AWS_ACCESS_KEY_ID="your-b2-key-id"
+AWS_SECRET_ACCESS_KEY="your-b2-application-key"
+RESTIC_PASSWORD="your-long-restic-passphrase"
+SYSTEM3_BACKUP_STORAGE_LABEL="Backblaze B2 (your-backup-bucket)"
+SYSTEM3_BACKUP_STORAGE_URL="https://secure.backblaze.com/b2_buckets.htm"
+```
+
+If you use the native `b2:` backend instead, or any other restic backend, set
+the backend-specific credential vars and declare any extra ones in
+`SYSTEM3_BACKUP_REQUIRED_RUNTIME_ENV_VARS` so the status surfaces gate on the
+right credentials.
+
+## Notifications and operator surfaces
+
+The chassis is meant to be quiet by default and only ask for attention when it
+has a specific action to offer.
+
+macOS:
+
+- SwiftBar is the richer operator surface
+- the generated wrapper points at `bin/system3-backup-swiftbar`
+- local failure notifications are optional
+- to enable them, set `SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT="$REPO_ROOT/bin/system3-backup-notify-macos"`
+
+Linux:
+
+- the shared CLI and HTML dashboard work today
+- local notifications use `notify-send` through `bin/system3-backup-notify-linux`
+- the first Linux tray/menu path uses `yad`
+- `xdg-open` is used for opening the dashboard and latest log from tray actions
+
+If you want the Linux tray surface, install the optional desktop packages first.
+On Debian/Ubuntu that usually means:
+
+```bash
+sudo apt install yad libnotify-bin xdg-utils
+```
+
+Then generate the tray autostart entry:
+
+```bash
+bin/system3-backup install --platform linux --enable-tray
+```
+
+Or run the tray directly:
+
+```bash
+SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
+  bin/system3-backup tray --platform linux
+```
+
+## Rough Backblaze cost guide
+
+At current Backblaze B2 pay-as-you-go pricing, the rough model is:
+
+- storage: about `$6 / TB / month`
+- downloads: free up to `3x` your average monthly stored data, then about `$0.01 / GB`
+- first `10 GB` stored is free
+
+Rough storage-only examples:
+
+- `100 GB` stored: about `$0.60 / month`
+- `500 GB` stored: about `$3.00 / month`
+- `1 TB` stored: about `$6.00 / month`
+- `2 TB` stored: about `$12.00 / month`
+
+For a personal encrypted backup repo, storage cost is usually the main number.
+Request/API costs are typically minor unless you are doing something unusually
+chatty. Check the current official pricing before budgeting:
+https://www.backblaze.com/cloud-storage/pricing
 
 ## Current status
 
@@ -62,9 +179,9 @@ Matt's live deployment already dogfoods the repo-backed backup, recovery-proof,
 dashboard, and menubar runtimes through thin local wrappers and machine-local
 config on macOS.
 
-The repo now also contains a first Linux adapter path for `systemd --user`
-scheduling plus the dashboard surface, but that Linux lane is not yet dogfooded
-by Matt.
+The repo now also contains a Linux adapter path for `systemd --user`
+scheduling, the dashboard surface, and a first optional tray/menu surface, but
+that Linux lane is not yet dogfooded by Matt.
 
 The shared cross-platform operator surface is:
 
@@ -103,6 +220,7 @@ That means:
 - `docs/architecture.md` — role boundaries and source-of-truth split
 - `docs/install-linux.md` — first Linux setup path
 - `docs/install-macos.md` — setup guidance for a second macOS machine
+- `docs/agents.md` — programmatic install path for Claude/Codex-style agents
 - `docs/portability.md` — portable-core vs platform-adapter boundaries
 - `config/` — example config surfaces for reusable deployments
 - `templates/` — example `launchd`, `systemd`, and status-surface templates
@@ -140,6 +258,7 @@ The extracted runtime now includes:
 - `bin/system3-backup-ci-check`
 - `bin/system3-backup-ci-check-linux`
 - `bin/system3-backup-install-linux`
+- `bin/system3-backup-linux-tray`
 - `bin/system3-backup-install-macos`
 - `bin/system3-backup-linux-smoke-test`
 - `bin/system3-backup-notify-linux`
@@ -173,6 +292,9 @@ That Linux lane now also has bundled `systemd-inhibit` and `notify-send`
 adapter hooks, so it can take a first step toward local operational parity
 without pushing more platform conditionals into the portable core.
 
+There is now also a first optional Linux tray/menu adapter built around `yad`
+plus a generated desktop autostart entry for session startup.
+
 The portable core no longer calls `caffeinate` or `osascript` directly.
 Those behaviors now live behind explicit adapter-script hooks so the core can
 stay platform-neutral while the macOS adapter keeps its richer operator
@@ -185,6 +307,7 @@ Before you point this at a real repository, run:
 ```bash
 bin/system3-backup doctor --portable-core
 bin/system3-backup doctor
+bin/system3-backup doctor --linux-adapter
 bin/system3-backup-ci-check
 ```
 
@@ -217,9 +340,11 @@ bin/system3-backup help
 bin/system3-backup doctor
 bin/system3-backup install --plan
 bin/system3-backup install --platform linux --plan --json
+bin/system3-backup install --platform linux --enable-tray
 bin/system3-backup install --warn-after-seconds 86400 --critical-after-seconds 172800
 bin/system3-backup backup --check-config
 bin/system3-backup status --json
+bin/system3-backup tray --platform linux
 bin/system3-backup verify --force
 bin/system3-backup smoke-test
 ```
@@ -235,6 +360,21 @@ The install command is now programmatic:
 Those backup-age thresholds are explicit because laptops sleep and shut down.
 The default policy should stay quiet for normal offline gaps and only escalate
 after a full day without a completed backup.
+
+## For agents
+
+If an agent is setting this up for a human, the clean flow is:
+
+1. run `bin/system3-backup doctor --portable-core`
+2. run `bin/system3-backup install --plan --json`
+3. explain the outputs and next steps to the human
+4. fill in `system3-backup.env`, `paths.txt`, and `excludes.txt`
+5. run `bin/system3-backup backup --check-config`
+6. enable the platform scheduler
+7. run one real backup and one forced verification pass
+8. confirm with `bin/system3-backup status --json`
+
+There is a dedicated agent-facing doc at `docs/agents.md`.
 
 ## License
 

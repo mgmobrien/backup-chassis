@@ -11,6 +11,28 @@ Today, the repo contains:
 - config examples
 - launchd and SwiftBar templates
 
+## Backblaze B2 example
+
+The example config uses Backblaze B2 through restic's S3-compatible path:
+
+```bash
+RESTIC_REPOSITORY="s3:s3.us-west-000.backblazeb2.com/your-backup-bucket"
+AWS_ACCESS_KEY_ID="your-b2-key-id"
+AWS_SECRET_ACCESS_KEY="your-b2-application-key"
+RESTIC_PASSWORD="your-long-restic-passphrase"
+SYSTEM3_BACKUP_STORAGE_LABEL="Backblaze B2 (your-backup-bucket)"
+SYSTEM3_BACKUP_STORAGE_URL="https://secure.backblaze.com/b2_buckets.htm"
+```
+
+Rough current storage-only cost at Backblaze B2 rates:
+
+- `100 GB`: about `$0.60 / month`
+- `500 GB`: about `$3 / month`
+- `1 TB`: about `$6 / month`
+
+Check current pricing before budgeting:
+https://www.backblaze.com/cloud-storage/pricing
+
 ## 1. Install dependencies
 
 - install `restic`
@@ -114,6 +136,14 @@ In `system3-backup.env`, set:
 - state and log directories
 - `SYSTEM3_BACKUP_WARN_AFTER_SECONDS` and `SYSTEM3_BACKUP_CRITICAL_AFTER_SECONDS` if you want a different idle-backup warning ladder
 - `SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH` only if you want to override the default matching behavior; if left blank, the first configured backup path is used automatically
+
+If you want local macOS failure notifications, also set:
+
+```bash
+SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT="$REPO_ROOT/bin/system3-backup-notify-macos"
+```
+
+That is optional. The main macOS operator surface is still SwiftBar.
 
 ## 4. Check config before first run
 

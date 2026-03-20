@@ -12,13 +12,16 @@ LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/system3-backup/log"
 DASHBOARD_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/system3-backup"
 DASHBOARD_OUTPUT="$DASHBOARD_DIR/index.html"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
 SYSTEMD_SERVICE_PATH="$SYSTEMD_USER_DIR/system3-backup.service"
 SYSTEMD_TIMER_PATH="$SYSTEMD_USER_DIR/system3-backup.timer"
+TRAY_DESKTOP_PATH="$AUTOSTART_DIR/system3-backup-tray.desktop"
 SERVICE_LABEL="system3-backup.service"
 DISPLAY_NAME="Backup"
 SCHEDULE_INTERVAL_SECONDS="14400"
 WARN_AFTER_SECONDS="86400"
 CRITICAL_AFTER_SECONDS="172800"
+ENABLE_TRAY="0"
 FORCE="0"
 PLAN_ONLY="0"
 JSON_OUTPUT="0"
@@ -45,11 +48,14 @@ Options:
   --systemd-user-dir PATH            systemd user-unit directory (default: $SYSTEMD_USER_DIR)
   --systemd-service-path PATH        systemd service output path
   --systemd-timer-path PATH          systemd timer output path
+  --autostart-dir PATH               Desktop autostart directory (default: $AUTOSTART_DIR)
+  --tray-desktop-path PATH           Tray desktop-entry output path
   --service-label LABEL              systemd service unit name
   --display-name NAME                Human-facing display name
   --schedule-interval-seconds N      systemd OnUnitActiveSec value in seconds (default: $SCHEDULE_INTERVAL_SECONDS)
   --warn-after-seconds N             Warning threshold for idle backups (default: $WARN_AFTER_SECONDS)
   --critical-after-seconds N         Critical threshold for idle backups (default: $CRITICAL_AFTER_SECONDS)
+  --enable-tray                      Generate a Linux tray autostart entry (requires yad at runtime)
   --plan                             Print the install plan without writing files
   --json                             Emit machine-readable output
   --force                            Overwrite existing generated files
@@ -87,12 +93,21 @@ while [[ $# -gt 0 ]]; do
             SYSTEMD_TIMER_PATH="$SYSTEMD_USER_DIR/system3-backup.timer"
             shift 2
             ;;
+        --autostart-dir)
+            AUTOSTART_DIR="$2"
+            TRAY_DESKTOP_PATH="$AUTOSTART_DIR/system3-backup-tray.desktop"
+            shift 2
+            ;;
         --systemd-service-path)
             SYSTEMD_SERVICE_PATH="$2"
             shift 2
             ;;
         --systemd-timer-path)
             SYSTEMD_TIMER_PATH="$2"
+            shift 2
+            ;;
+        --tray-desktop-path)
+            TRAY_DESKTOP_PATH="$2"
             shift 2
             ;;
         --service-label)
@@ -114,6 +129,10 @@ while [[ $# -gt 0 ]]; do
         --critical-after-seconds)
             CRITICAL_AFTER_SECONDS="$2"
             shift 2
+            ;;
+        --enable-tray)
+            ENABLE_TRAY="1"
+            shift
             ;;
         --plan)
             PLAN_ONLY="1"
@@ -171,8 +190,9 @@ emit_summary_json() {
     local env_action="$4"
     local paths_action="$5"
     local excludes_action="$6"
+    local tray_action="$7"
 
-    python3 - "$mode" "$CONFIG_HOME" "$STATE_DIR" "$LOG_DIR" "$DASHBOARD_DIR" "$DASHBOARD_OUTPUT" "$SERVICE_LABEL" "$DISPLAY_NAME" "$SCHEDULE_INTERVAL_SECONDS" "$WARN_AFTER_SECONDS" "$CRITICAL_AFTER_SECONDS" "$ENV_FILE" "$env_action" "$PATHS_FILE" "$paths_action" "$EXCLUDES_FILE" "$excludes_action" "$SYSTEMD_SERVICE_PATH" "$service_action" "$SYSTEMD_TIMER_PATH" "$timer_action" <<'PY'
+    python3 - "$mode" "$CONFIG_HOME" "$STATE_DIR" "$LOG_DIR" "$DASHBOARD_DIR" "$DASHBOARD_OUTPUT" "$SERVICE_LABEL" "$DISPLAY_NAME" "$SCHEDULE_INTERVAL_SECONDS" "$WARN_AFTER_SECONDS" "$CRITICAL_AFTER_SECONDS" "$ENV_FILE" "$env_action" "$PATHS_FILE" "$paths_action" "$EXCLUDES_FILE" "$excludes_action" "$SYSTEMD_SERVICE_PATH" "$service_action" "$SYSTEMD_TIMER_PATH" "$timer_action" "$ENABLE_TRAY" "$TRAY_DESKTOP_PATH" "$tray_action" <<'PY'
 import json
 import sys
 
@@ -198,6 +218,9 @@ import sys
     service_action,
     timer_path,
     timer_action,
+    enable_tray,
+    tray_desktop_path,
+    tray_action,
 ) = sys.argv[1:]
 
 data = {
@@ -234,8 +257,15 @@ data = {
     ],
 }
 
+if enable_tray == "1":
+    data["outputs"].append({"label": "tray_desktop", "path": tray_desktop_path, "action": tray_action})
+    data["post_apply_validations"].append("linux_tray_shell_syntax")
+    data["next_steps"].append(f'Run `SYSTEM3_BACKUP_ENV_FILE="{env_file}" bin/system3-backup tray --platform linux` after login, or re-login to let desktop autostart launch it.')
+
 if mode == "apply":
     data["validated_now"] = ["linux_adapter_doctor", "systemd_analyze_verify", "check_config"]
+    if enable_tray == "1":
+        data["validated_now"].append("linux_tray_shell_syntax")
 
 print(json.dumps(data, indent=2))
 PY
@@ -248,6 +278,7 @@ emit_summary_text() {
     local env_action="$4"
     local paths_action="$5"
     local excludes_action="$6"
+    local tray_action="$7"
 
     if [[ "$mode" == "plan" ]]; then
         cat <<EOF
@@ -260,6 +291,13 @@ Planned outputs:
 - [$excludes_action] excludes: $EXCLUDES_FILE
 - [$service_action] systemd service: $SYSTEMD_SERVICE_PATH
 - [$timer_action] systemd timer: $SYSTEMD_TIMER_PATH
+EOF
+        if [[ "$ENABLE_TRAY" == "1" ]]; then
+            cat <<EOF
+- [$tray_action] tray autostart: $TRAY_DESKTOP_PATH
+EOF
+        fi
+        cat <<EOF
 
 Checked now:
 - host prerequisites via the Linux adapter doctor
@@ -267,6 +305,13 @@ Checked now:
 Will validate on apply:
 - systemd unit syntax via systemd-analyze verify
 - generated env / config coherence via --check-config
+EOF
+        if [[ "$ENABLE_TRAY" == "1" ]]; then
+            cat <<EOF
+- Linux tray shell syntax
+EOF
+        fi
+        cat <<EOF
 
 Apply with:
 bin/system3-backup install --platform linux
@@ -284,11 +329,25 @@ Created or preserved:
 - excludes: $EXCLUDES_FILE
 - systemd service: $SYSTEMD_SERVICE_PATH
 - systemd timer: $SYSTEMD_TIMER_PATH
+EOF
+    if [[ "$ENABLE_TRAY" == "1" ]]; then
+        cat <<EOF
+- tray autostart: $TRAY_DESKTOP_PATH
+EOF
+    fi
+    cat <<EOF
 
 Validated automatically:
 - Linux adapter doctor
 - systemd unit syntax via systemd-analyze verify
 - generated env / config coherence via --check-config
+EOF
+    if [[ "$ENABLE_TRAY" == "1" ]]; then
+        cat <<EOF
+- Linux tray shell syntax
+EOF
+    fi
+    cat <<EOF
 
 Next steps:
 1. Edit $ENV_FILE with your restic repository, credentials, and labels.
@@ -297,6 +356,11 @@ Next steps:
 4. Reload units: systemctl --user daemon-reload
 5. Enable the timer: systemctl --user enable --now "$(basename "$SYSTEMD_TIMER_PATH")"
 EOF
+    if [[ "$ENABLE_TRAY" == "1" ]]; then
+        cat <<EOF
+6. Log in again or run: SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup" tray --platform linux
+EOF
+    fi
 }
 
 log "check prerequisites"
@@ -329,8 +393,10 @@ LOG_DIR="$(resolve_path "$LOG_DIR")"
 DASHBOARD_DIR="$(resolve_path "$DASHBOARD_DIR")"
 DASHBOARD_OUTPUT="$(resolve_path "$DASHBOARD_OUTPUT")"
 SYSTEMD_USER_DIR="$(resolve_path "$SYSTEMD_USER_DIR")"
+AUTOSTART_DIR="$(resolve_path "$AUTOSTART_DIR")"
 SYSTEMD_SERVICE_PATH="$(resolve_path "$SYSTEMD_SERVICE_PATH")"
 SYSTEMD_TIMER_PATH="$(resolve_path "$SYSTEMD_TIMER_PATH")"
+TRAY_DESKTOP_PATH="$(resolve_path "$TRAY_DESKTOP_PATH")"
 
 ENV_FILE="$CONFIG_HOME/system3-backup.env"
 PATHS_FILE="$CONFIG_HOME/paths.txt"
@@ -342,12 +408,13 @@ PATHS_ACTION="$(planned_action "$PATHS_FILE")"
 EXCLUDES_ACTION="$(planned_action "$EXCLUDES_FILE")"
 SYSTEMD_SERVICE_ACTION="$(planned_action "$SYSTEMD_SERVICE_PATH")"
 SYSTEMD_TIMER_ACTION="$(planned_action "$SYSTEMD_TIMER_PATH")"
+TRAY_DESKTOP_ACTION="$(planned_action "$TRAY_DESKTOP_PATH")"
 
 if [[ "$PLAN_ONLY" == "1" ]]; then
     if [[ "$JSON_OUTPUT" == "1" ]]; then
-        emit_summary_json "plan" "$SYSTEMD_SERVICE_ACTION" "$SYSTEMD_TIMER_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION"
+        emit_summary_json "plan" "$SYSTEMD_SERVICE_ACTION" "$SYSTEMD_TIMER_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION" "$TRAY_DESKTOP_ACTION"
     else
-        emit_summary_text "plan" "$SYSTEMD_SERVICE_ACTION" "$SYSTEMD_TIMER_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION"
+        emit_summary_text "plan" "$SYSTEMD_SERVICE_ACTION" "$SYSTEMD_TIMER_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION" "$TRAY_DESKTOP_ACTION"
     fi
     exit 0
 fi
@@ -358,6 +425,10 @@ mkdir -p \
     "$LOG_DIR" \
     "$DASHBOARD_DIR" \
     "$SYSTEMD_USER_DIR"
+
+if [[ "$ENABLE_TRAY" == "1" ]]; then
+    mkdir -p "$AUTOSTART_DIR"
+fi
 
 write_file_if_allowed() {
     local target="$1"
@@ -456,6 +527,7 @@ SYSTEM3_BACKUP_RUNTIME_ENTRYPOINT="$REPO_ROOT/bin/system3-backup-backup"
 SYSTEM3_BACKUP_BACKUP_PROCESS_MATCH="restic backup"
 SYSTEM3_BACKUP_VERIFY_SCRIPT="$REPO_ROOT/bin/system3-backup-verify"
 SYSTEM3_BACKUP_VERIFY_PROCESS_MATCH="system3-backup-verify"
+SYSTEM3_BACKUP_LINUX_TRAY_POLL_SECONDS="300"
 
 # Verification tuning
 # Leave blank to use the first configured backup path automatically.
@@ -499,6 +571,19 @@ Unit=$SERVICE_LABEL
 WantedBy=timers.target
 EOF
 
+if [[ "$ENABLE_TRAY" == "1" ]]; then
+    write_file_if_allowed "$TRAY_DESKTOP_PATH" 0644 <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=$DISPLAY_NAME tray
+Comment=Linux tray surface for backup-chassis
+Exec=env SYSTEM3_BACKUP_ENV_FILE=$ENV_FILE $REPO_ROOT/bin/system3-backup-linux-tray
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+fi
+
 validate_generated_surface() {
     local validation_env
 
@@ -528,12 +613,16 @@ PY
 
     log "validate $ENV_FILE"
     SYSTEM3_BACKUP_ENV_FILE="$validation_env" "$REPO_ROOT/bin/system3-backup-backup" --check-config >/dev/null
+    if [[ "$ENABLE_TRAY" == "1" ]]; then
+        log "validate linux tray script"
+        bash -n "$REPO_ROOT/bin/system3-backup-linux-tray"
+    fi
     rm -f "$validation_env"
 }
 
 validate_generated_surface
 if [[ "$JSON_OUTPUT" == "1" ]]; then
-    emit_summary_json "apply" "$SYSTEMD_SERVICE_ACTION" "$SYSTEMD_TIMER_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION"
+    emit_summary_json "apply" "$SYSTEMD_SERVICE_ACTION" "$SYSTEMD_TIMER_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION" "$TRAY_DESKTOP_ACTION"
 else
-    emit_summary_text "apply" "$SYSTEMD_SERVICE_ACTION" "$SYSTEMD_TIMER_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION"
+    emit_summary_text "apply" "$SYSTEMD_SERVICE_ACTION" "$SYSTEMD_TIMER_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION" "$TRAY_DESKTOP_ACTION"
 fi

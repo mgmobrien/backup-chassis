@@ -17,6 +17,7 @@ Commands:
   verify [args]                    Run an integrity check + restore drill
   status [--json]                  Show operator-facing backup status
   dashboard [args]                 Render the local HTML dashboard
+  tray [--platform linux]          Run the optional Linux tray surface
   smoke-test [--platform ...]      Run the platform smoke test
   help                             Show this help
 
@@ -25,6 +26,7 @@ Examples:
   bin/system3-backup install --plan
   bin/system3-backup install --platform linux --json --plan
   bin/system3-backup status --json
+  bin/system3-backup tray --platform linux
   bin/system3-backup smoke-test
 EOF
 }
@@ -85,6 +87,9 @@ dispatch_platform_command() {
         smoke-test:linux)
             target_script="$REPO_ROOT/bin/system3-backup-linux-smoke-test"
             ;;
+        tray:linux)
+            target_script="$REPO_ROOT/bin/system3-backup-linux-tray"
+            ;;
         *)
             echo "Unsupported platform for $command: $platform" >&2
             exit 2
@@ -117,6 +122,9 @@ case "$command_name" in
         ;;
     dashboard)
         exec "$REPO_ROOT/bin/system3-backup-dashboard" "$@"
+        ;;
+    tray)
+        dispatch_platform_command tray "$@"
         ;;
     smoke-test)
         dispatch_platform_command smoke-test "$@"

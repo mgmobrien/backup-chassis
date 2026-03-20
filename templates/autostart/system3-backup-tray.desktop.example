@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Backup tray
+Comment=Linux tray surface for backup-chassis
+Exec=env SYSTEM3_BACKUP_ENV_FILE=/ABSOLUTE/PATH/TO/system3-backup.env /ABSOLUTE/PATH/TO/backup-chassis/bin/system3-backup-linux-tray
+Terminal=false
+X-GNOME-Autostart-enabled=true
