@@ -103,11 +103,10 @@ The local operator label can remain `Backup`.
 
 ## Portability boundary
 
-The public chassis is still macOS-first, but it now has an explicit portability
-boundary:
+The public chassis now has an explicit portability boundary:
 
 - portable core: env loading, backup execution, verification logic, state-file generation, dashboard rendering
-- macOS adapter: `launchd`, SwiftBar, `caffeinate`, `osascript`, and the current install/bootstrap path
+- macOS adapter: `launchd`, SwiftBar, bundled `caffeinate` / notification adapter scripts, and the current install/bootstrap path
 - Linux adapter: `systemd --user` plus dashboard-oriented operation, kept separate from the current macOS scripts instead of folded into them as conditionals
 
 That split is described in `docs/portability.md`.

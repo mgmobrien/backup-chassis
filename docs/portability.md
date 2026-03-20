@@ -2,12 +2,12 @@
 
 ## Current truth
 
-`backup-chassis` is currently a macOS deployment chassis with a partially
-portable runtime inside it.
+`backup-chassis` is currently a portable backup core with explicit macOS and
+Linux adapter lanes.
 
 That means:
 
-- the public install story is macOS-only
+- the public install story now includes macOS and a first Linux adapter
 - the live dogfood deployment is macOS-only
 - the core backup and verification logic is more portable than the install and operator surfaces
 
@@ -41,13 +41,14 @@ These components are explicitly tied to the current macOS deployment:
 
 - `launchd` scheduling
 - SwiftBar menubar integration
-- `caffeinate`
-- `osascript` notifications
+- bundled adapter scripts for `caffeinate` and `osascript`
 - the `system3-backup-install-macos` bootstrap path
 
 Today that mostly maps to:
 
 - `bin/system3-backup-install-macos`
+- `bin/system3-backup-wrap-caffeinate`
+- `bin/system3-backup-notify-macos`
 - `bin/system3-backup-swiftbar`
 - `templates/launchd/com.system3.backup.plist.example`
 - `templates/swiftbar/system3-backup.5m.sh.example`
@@ -97,7 +98,7 @@ runtime and operator model for it.
 
 Near-term work should:
 
-- keep public docs honest that installation is macOS-only today
+- keep public docs honest about the real adapter support that exists today
 - reduce remaining Matt-local assumptions in the portable core
 - move backend- and platform-specific behavior behind explicit config or adapter surfaces
 - avoid baking new macOS details into the reusable core

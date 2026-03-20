@@ -52,6 +52,14 @@ The installer writes:
 - a `systemd --user` service
 - a `systemd --user` timer
 
+The generated Linux env leaves the macOS-specific adapter hooks empty:
+
+- `SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT=""`
+- `SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT=""`
+
+That keeps the Linux install on the portable core plus `systemd` adapter path
+without pretending Linux already has a tray or local notification surface.
+
 And validates:
 
 - the generated unit files with `systemd-analyze verify`

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DETAIL="${1:-}"
+TITLE="${2:-${SYSTEM3_BACKUP_DISPLAY_NAME:-Backup}}"
+
+if [[ -z "$DETAIL" ]]; then
+    echo "Usage: system3-backup-notify-macos MESSAGE [TITLE]" >&2
+    exit 2
+fi
+
+if ! command -v osascript >/dev/null 2>&1; then
+    exit 0
+fi
+
+APPLE_SCRIPT="$(python3 - "$DETAIL" "$TITLE" <<'PY'
+import json
+import sys
+
+detail = json.dumps(sys.argv[1])
+title = json.dumps(sys.argv[2])
+print(f"display notification {detail} with title {title} sound name \"Basso\"")
+PY
+)"
+
+osascript -e "$APPLE_SCRIPT" >/dev/null 2>&1 || true

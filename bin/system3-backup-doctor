@@ -5,7 +5,7 @@ MODE="macos"
 
 usage() {
     cat <<EOF
-Usage: system3-backup-doctor [--portable-core]
+Usage: system3-backup-doctor [--portable-core|--linux-adapter]
 
 Checks host prerequisites for backup-chassis.
 
@@ -121,6 +121,16 @@ else
             printf '  missing  %s\n' "$command_name"
         fi
     done
+    if [[ -x "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/system3-backup-wrap-caffeinate" ]]; then
+        echo "  ok       bundled caffeinate wrapper"
+    else
+        echo "  missing  bundled caffeinate wrapper"
+    fi
+    if [[ -x "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/system3-backup-notify-macos" ]]; then
+        echo "  ok       bundled macOS notify adapter"
+    else
+        echo "  missing  bundled macOS notify adapter"
+    fi
     printf '  %s       SwiftBar app\n' "$swiftbar_detected"
 fi
 

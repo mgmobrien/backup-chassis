@@ -18,6 +18,18 @@ VERIFY_SCRIPT="${SYSTEM3_BACKUP_VERIFY_SCRIPT:-$SCRIPT_DIR/system3-backup-verify
 
 declare -a BACKUP_PATHS=()
 
+validate_optional_script() {
+    local label="$1"
+    local path="$2"
+
+    if [[ -z "$path" || -x "$path" ]]; then
+        return 0
+    fi
+
+    printf '%s is configured but not executable: %s\n' "$label" "$path" >&2
+    return 1
+}
+
 cleanup() {
     rm -f "$PIDFILE"
 }
@@ -25,8 +37,8 @@ trap cleanup EXIT
 
 notify_local_failure() {
     local detail="$1"
-    if [[ "$SYSTEM3_BACKUP_ENABLE_MACOS_NOTIFICATIONS" == "1" ]] && command -v osascript >/dev/null 2>&1; then
-        osascript -e "display notification \"$detail\" with title \"Backup\" sound name \"Basso\"" >/dev/null 2>&1 || true
+    if [[ -n "${SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT:-}" ]]; then
+        "$SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT" "$detail" "$SYSTEM3_BACKUP_DISPLAY_NAME" >/dev/null 2>&1 || true
     fi
 }
 
@@ -244,6 +256,8 @@ print_config_check() {
     printf 'status_file=%s\n' "$STATUS_FILE"
     printf 'snapshots_cache_file=%s\n' "$SNAPSHOTS_CACHE_FILE"
     printf 'canary_file=%s\n' "$SYSTEM3_BACKUP_CANARY_FILE"
+    printf 'run_wrapper_script=%s\n' "${SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT:-}"
+    printf 'failure_notify_script=%s\n' "${SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT:-}"
     printf 'schedule_interval_seconds=%s\n' "$SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS"
     printf 'retention=%s/%s/%s\n' "$SYSTEM3_BACKUP_KEEP_DAILY" "$SYSTEM3_BACKUP_KEEP_WEEKLY" "$SYSTEM3_BACKUP_KEEP_MONTHLY"
     printf 'paths:\n'
@@ -269,6 +283,8 @@ fi
 echo $$ > "$PIDFILE"
 
 load_backup_paths
+validate_optional_script "run wrapper script" "${SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT:-}"
+validate_optional_script "failure notify script" "${SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT:-}"
 
 if [[ "$MODE" == "--check-config" ]]; then
     print_config_check
@@ -294,8 +310,8 @@ fi
 BACKUP_CMD+=("${BACKUP_PATHS[@]}")
 
 declare -a RUN_CMD
-if [[ "$SYSTEM3_BACKUP_USE_CAFFEINATE" == "1" ]] && command -v caffeinate >/dev/null 2>&1; then
-    RUN_CMD=(caffeinate -s "${BACKUP_CMD[@]}")
+if [[ -n "${SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT:-}" ]]; then
+    RUN_CMD=("$SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT" "${BACKUP_CMD[@]}")
 else
     RUN_CMD=("${BACKUP_CMD[@]}")
 fi

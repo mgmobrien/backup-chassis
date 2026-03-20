@@ -158,6 +158,11 @@ There is also now a first Linux bootstrap path that can lay down a local config
 surface plus `systemd --user` service/timer files without pretending the Linux
 operator surface is already as rich as the macOS one.
 
+The portable core no longer calls `caffeinate` or `osascript` directly.
+Those behaviors now live behind explicit adapter-script hooks so the core can
+stay platform-neutral while the macOS adapter keeps its richer operator
+surface.
+
 ## Validate before trusting it
 
 Before you point this at a real repository, run:
