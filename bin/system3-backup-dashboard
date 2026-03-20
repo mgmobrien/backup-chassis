@@ -20,6 +20,7 @@ MONITOR_LABEL="$SYSTEM3_BACKUP_MONITOR_LABEL"
 ENCRYPTION_LABEL="$SYSTEM3_BACKUP_ENCRYPTION_LABEL"
 CREDENTIALS_LABEL="$SYSTEM3_BACKUP_CREDENTIALS_LABEL"
 RUNTIME_ENTRYPOINT="${SYSTEM3_BACKUP_RUNTIME_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-backup}"
+BACKUP_PROCESS_MATCH="${SYSTEM3_BACKUP_BACKUP_PROCESS_MATCH:-restic backup}"
 
 mkdir -p "$DASH_DIR"
 
@@ -27,7 +28,20 @@ SNAPSHOTS_JSON=""
 STALE_SNAPSHOTS_JSON=""
 if [[ -f "$SNAP_CACHE" ]]; then
     STALE_SNAPSHOTS_JSON="$(cat "$SNAP_CACHE")"
-    CACHE_AGE=$(( $(date +%s) - $(stat -f %m "$SNAP_CACHE") ))
+    CACHE_AGE="$(
+        python3 - "$SNAP_CACHE" <<'PY'
+import os
+import sys
+import time
+
+path = sys.argv[1]
+try:
+    age = max(0, int(time.time() - os.path.getmtime(path)))
+except OSError:
+    age = 999999999
+print(age)
+PY
+    )"
     if [[ "$CACHE_AGE" -lt 21600 ]]; then
         SNAPSHOTS_JSON="$STALE_SNAPSHOTS_JSON"
     fi
@@ -43,7 +57,10 @@ if [[ -z "$SNAPSHOTS_JSON" ]]; then
     fi
 fi
 
-RUNNING_PID="$(pgrep -f "restic backup" 2>/dev/null | head -1 || echo "")"
+RUNNING_PID=""
+if [[ -n "$BACKUP_PROCESS_MATCH" ]]; then
+    RUNNING_PID="$(pgrep -f "$BACKUP_PROCESS_MATCH" 2>/dev/null | head -1 || echo "")"
+fi
 
 STATUS_JSON="{}"
 if [[ -f "$STATUS_FILE" ]]; then
