@@ -172,11 +172,17 @@ VERIFY_CHECK_AGE="${SUMMARY_VERIFY_CHECK_AGE:-never}"
 VERIFY_RESTORE_AGE="${SUMMARY_VERIFY_RESTORE_AGE:-never}"
 VERIFY_CHECK_LINE_SUFFIX=""
 VERIFY_RESTORE_LINE_SUFFIX=""
+BACKUP_LINE_SUFFIX=""
 if [[ -n "${SUMMARY_VERIFY_CHECK_DUE_LABEL:-}" ]]; then
     VERIFY_CHECK_LINE_SUFFIX=" (next ${SUMMARY_VERIFY_CHECK_DUE_LABEL})"
 fi
 if [[ -n "${SUMMARY_VERIFY_RESTORE_DUE_LABEL:-}" ]]; then
     VERIFY_RESTORE_LINE_SUFFIX=" (next ${SUMMARY_VERIFY_RESTORE_DUE_LABEL})"
+fi
+if [[ -n "${SUMMARY_NEXT_RUN_LABEL:-}" ]]; then
+    BACKUP_LINE_SUFFIX=" (next ${SUMMARY_NEXT_RUN_LABEL})"
+elif [[ -n "${SUMMARY_NEXT_RUN_DETAIL:-}" ]]; then
+    BACKUP_LINE_SUFFIX=" (next ${SUMMARY_NEXT_RUN_DETAIL})"
 fi
 
 title_gb_from_status() {
@@ -443,15 +449,14 @@ else
     if [[ "$SUMMARY_STATUS_CODE" == "verification_failed" ]]; then
         echo "${DISPLAY_NAME} status: recovery proof failed | color=${CRITICAL_TEXT_COLOR} size=14"
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
-            echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
+            echo "  Last backup: ${SUMMARY_LATEST_FULL_AGE}${BACKUP_LINE_SUFFIX} | size=13"
         fi
         echo "  ${SUMMARY_STATUS_DETAIL} | size=13"
     elif [[ "$SUMMARY_STATUS_HEALTH" == "ok" ]]; then
-        echo "${DISPLAY_NAME} status: verified (${SUMMARY_LATEST_FULL_AGE}) | size=14"
-        if [[ -n "$SUMMARY_NEXT_RUN_LABEL" ]]; then
-            echo "  Next automatic run: ${SUMMARY_NEXT_RUN_LABEL} | size=13"
-        elif [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
-            echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
+        if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
+            echo "Last backup: ${SUMMARY_LATEST_FULL_AGE}${BACKUP_LINE_SUFFIX} | size=14"
+        else
+            echo "Last backup: recent${BACKUP_LINE_SUFFIX} | size=14"
         fi
         echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
         echo "  Restore drill: ${VERIFY_RESTORE_AGE}${VERIFY_RESTORE_LINE_SUFFIX} | size=13"
@@ -459,24 +464,14 @@ else
     elif [[ "$SUMMARY_STATUS_CODE" == "backup_proof_stale" ]]; then
         echo "${DISPLAY_NAME} status: backup healthy, recovery proof stale | color=${WARNING_TEXT_COLOR} size=14"
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
-            echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
-        fi
-        if [[ -n "$SUMMARY_NEXT_RUN_LABEL" ]]; then
-            echo "  Next automatic run: ${SUMMARY_NEXT_RUN_LABEL} | size=13"
-        elif [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
-            echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
+            echo "  Last backup: ${SUMMARY_LATEST_FULL_AGE}${BACKUP_LINE_SUFFIX} | size=13"
         fi
         echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
         echo "  Restore drill: ${VERIFY_RESTORE_AGE}${VERIFY_RESTORE_LINE_SUFFIX} | size=13"
     else
         echo "${DISPLAY_NAME} status: ${SUMMARY_STATUS_TEXT} | color=${WARNING_TEXT_COLOR} size=14"
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
-            echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
-        fi
-        if [[ -n "$SUMMARY_NEXT_RUN_LABEL" ]]; then
-            echo "  Next automatic run: ${SUMMARY_NEXT_RUN_LABEL} | size=13"
-        elif [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
-            echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
+            echo "  Last backup: ${SUMMARY_LATEST_FULL_AGE}${BACKUP_LINE_SUFFIX} | size=13"
         fi
         echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
         echo "  Restore drill: ${VERIFY_RESTORE_AGE}${VERIFY_RESTORE_LINE_SUFFIX} | size=13"

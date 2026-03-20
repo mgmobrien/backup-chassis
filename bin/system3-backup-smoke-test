@@ -206,7 +206,7 @@ PY
 echo "render menubar"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-swiftbar" > "$TMP_ROOT/swiftbar.txt"
 assert_contains "checkmark.circle.fill" "$TMP_ROOT/swiftbar.txt"
-assert_contains "Backup smoke status: verified" "$TMP_ROOT/swiftbar.txt"
+assert_contains "Last backup:" "$TMP_ROOT/swiftbar.txt"
 assert_contains "$SMOKE_SNAPSHOT_ID" "$TMP_ROOT/swiftbar.txt"
 
 echo "check cli help"

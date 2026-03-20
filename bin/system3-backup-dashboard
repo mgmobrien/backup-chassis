@@ -250,7 +250,7 @@ def color_for_health(health):
 
 verify_health = status_summary.get("verify_health", "missing")
 verify_text = status_summary.get("verify_text", "No recovery proof record")
-verify_detail_text = status_summary.get("verify_detail", "Run verification now to create the first recoverability proof.")
+verify_detail_text = status_summary.get("verify_detail", "Run proof now to create the first recoverability proof.")
 verify_color = color_for_health(verify_health)
 verify_check_age = status_summary.get("verify_check_age", verify_check_age)
 verify_restore_age = status_summary.get("verify_restore_age", verify_restore_age)
@@ -367,7 +367,7 @@ print(f"""<!DOCTYPE html>
 print(f"""
 <div class="card" style="margin-bottom: 24px;">
   <div class="card-label">How recovery proof works</div>
-  <div class="card-detail" style="color: #ccc; font-size: 13px;">Backup only shows green when two proof signals are fresh: an integrity check that reads backup data for corruption, and a restore drill that restores a canary file to prove recovery works.</div>
+  <div class="card-detail" style="color: #ccc; font-size: 13px;">Backup only shows the healthy check state when two proof signals are fresh: an integrity check that reads backup data for corruption, and a restore drill that restores a canary file to prove recovery works.</div>
 </div>
 """)
 
@@ -392,9 +392,9 @@ if current_state in ("maintenance_warning", "waiting_for_network", "retry_pendin
 
 if verify_health in ("failed", "stale", "missing"):
     verify_warning = {
-        "failed": f"The latest verification pass failed. {display_name} should not present a green confidence signal until this is fixed.",
-        "stale": "Backups are landing, but recoverability proof is overdue. The system should warn instead of silently staying green.",
-        "missing": "No verification record exists yet. Run verification now or wait for the next due pass.",
+        "failed": f"The latest recovery-proof pass failed. {display_name} should not present a healthy confidence signal until this is fixed.",
+        "stale": "Backups are landing, but recoverability proof is overdue. The system should warn instead of silently staying healthy.",
+        "missing": "No recovery-proof record exists yet. Run proof now or wait for the next due pass.",
     }.get(verify_health, "")
     print(f"""
 <div class="card" style="margin-bottom: 24px; border: 1px solid {verify_color};">

@@ -276,7 +276,7 @@ if latest_full_dt and schedule_interval_s > 0:
 
 backup_timing_detail = f"Last full backup {latest_full_age}"
 if next_run_dt:
-    backup_timing_detail = f"{backup_timing_detail} · next automatic run {next_run_label_text}"
+    backup_timing_detail = f"{backup_timing_detail} (next {next_run_label_text})"
 
 verify_state = verify.get("state", "")
 verify_detail = verify.get("detail", "")
@@ -298,7 +298,7 @@ verify_check_due_detail = next_run_detail(verify_next_check_dt) if verify_next_c
 verify_restore_due_detail = next_run_detail(verify_next_restore_dt) if verify_next_restore_dt else ""
 verify_health = "missing"
 verify_text = "No recovery proof record"
-verify_detail_text = verify_detail or "Run verification now to create the first recoverability proof."
+verify_detail_text = verify_detail or "Run proof now to create the first recoverability proof."
 
 if verify_state == "failed":
     verify_health = "failed"

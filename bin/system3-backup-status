@@ -57,12 +57,6 @@ print(data.get("status_detail", ""))
 snapshot = data.get("latest_full_snapshot", "")
 if snapshot:
     print(f"Snapshot {snapshot}")
-next_run = data.get("next_run_detail", "")
-next_run_compact = data.get("next_run_label", "")
-if next_run_compact:
-    print(f"Next automatic run: {next_run_compact}")
-elif next_run:
-    print(f"Next automatic run: {next_run}")
 print(f"Recovery proof: {data.get('verify_text', 'No recovery proof record')}")
 check_age = data.get("verify_check_age", "")
 restore_age = data.get("verify_restore_age", "")
