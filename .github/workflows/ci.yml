@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  validate:
+  validate-macos:
     runs-on: macos-latest
 
     steps:
@@ -17,3 +17,18 @@ jobs:
 
       - name: Run validation
         run: bin/system3-backup-ci-check
+
+  validate-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y restic
+
+      - name: Run Linux validation
+        run: bin/system3-backup-ci-check-linux

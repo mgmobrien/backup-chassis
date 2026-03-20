@@ -7,10 +7,10 @@ KEEP_TEMP="0"
 
 usage() {
     cat <<EOF
-Usage: system3-backup-smoke-test [--keep-temp]
+Usage: system3-backup-linux-smoke-test [--keep-temp]
 
-Bootstraps a temporary macOS install surface, seeds synthetic status data, and
-verifies that the generated env, launchd plist, dashboard, and SwiftBar output
+Bootstraps a temporary Linux install surface, seeds synthetic status data, and
+verifies that the generated env, systemd unit files, and dashboard output
 cohere end to end.
 EOF
 }
@@ -57,34 +57,36 @@ CONFIG_HOME="$TMP_ROOT/config"
 STATE_DIR="$TMP_ROOT/state"
 LOG_DIR="$TMP_ROOT/log"
 DASHBOARD_DIR="$TMP_ROOT/dashboard"
-LAUNCH_AGENT_PATH="$TMP_ROOT/LaunchAgents/com.system3.backup.plist"
-SWIFTBAR_PLUGIN_PATH="$TMP_ROOT/SwiftBar/system3-backup.5m.sh"
+SYSTEMD_USER_DIR="$TMP_ROOT/systemd-user"
+SYSTEMD_SERVICE_PATH="$SYSTEMD_USER_DIR/system3-backup.service"
+SYSTEMD_TIMER_PATH="$SYSTEMD_USER_DIR/system3-backup.timer"
 ENV_FILE="$CONFIG_HOME/system3-backup.env"
+PATHS_FILE="$CONFIG_HOME/paths.txt"
 SMOKE_DOCS="$TMP_ROOT/smoke-docs"
-SMOKE_SNAPSHOT_ID="smoke1234"
+SMOKE_SNAPSHOT_ID="linuxsmoke1234"
 
 mkdir -p "$SMOKE_DOCS"
 
 echo "bootstrap temp install"
-"$REPO_ROOT/bin/system3-backup-install-macos" \
+"$REPO_ROOT/bin/system3-backup-install-linux" \
     --config-home "$CONFIG_HOME" \
     --state-dir "$STATE_DIR" \
     --log-dir "$LOG_DIR" \
     --dashboard-dir "$DASHBOARD_DIR" \
-    --launch-agent-path "$LAUNCH_AGENT_PATH" \
-    --swiftbar-plugin-path "$SWIFTBAR_PLUGIN_PATH" \
-    --display-name "Backup smoke"
+    --systemd-user-dir "$SYSTEMD_USER_DIR" \
+    --systemd-service-path "$SYSTEMD_SERVICE_PATH" \
+    --systemd-timer-path "$SYSTEMD_TIMER_PATH" \
+    --display-name "Backup smoke" \
+    --force
 
-cat > "$CONFIG_HOME/paths.txt" <<EOF
+cat > "$PATHS_FILE" <<EOF
 $SMOKE_DOCS
 EOF
 
 cat >> "$ENV_FILE" <<EOF
 
 SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH="$SMOKE_DOCS"
-SYSTEM3_BACKUP_BACKUP_PROCESS_MATCH="__smoke_test_no_live_backup__"
-SYSTEM3_BACKUP_SCHEDULER_SERVICE=""
-SYSTEM3_BACKUP_DISPLAY_NAME="Backup smoke"
+SYSTEM3_BACKUP_BACKUP_PROCESS_MATCH="__linux_smoke_test_no_live_backup__"
 EOF
 
 python3 - "$STATE_DIR" "$SMOKE_DOCS" "$SMOKE_SNAPSHOT_ID" <<'PY'
@@ -140,11 +142,8 @@ with open(os.path.join(state_dir, "snapshots-cache.json"), "w") as f:
     json.dump(snapshots, f)
 PY
 
-echo "validate generated plist"
-plutil -lint "$LAUNCH_AGENT_PATH" >/dev/null
-
-echo "validate generated plugin shell"
-bash -n "$SWIFTBAR_PLUGIN_PATH"
+echo "validate generated unit files"
+systemd-analyze verify "$SYSTEMD_SERVICE_PATH" "$SYSTEMD_TIMER_PATH" >/dev/null
 
 echo "validate generated config"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-backup" --check-config >/dev/null
@@ -153,17 +152,17 @@ echo "render dashboard"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-dashboard" >/dev/null
 assert_contains "Backup smoke" "$DASHBOARD_DIR/index.html"
 assert_contains "$SMOKE_SNAPSHOT_ID" "$DASHBOARD_DIR/index.html"
+assert_contains "verified" "$DASHBOARD_DIR/index.html"
 
-echo "render menubar"
-SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-swiftbar" > "$TMP_ROOT/swiftbar.txt"
-assert_contains "checkmark.circle.fill" "$TMP_ROOT/swiftbar.txt"
-assert_contains "Backup smoke status: verified" "$TMP_ROOT/swiftbar.txt"
-assert_contains "$SMOKE_SNAPSHOT_ID" "$TMP_ROOT/swiftbar.txt"
+echo "assert unit contents"
+assert_contains "ExecStart=$REPO_ROOT/bin/system3-backup-backup" "$SYSTEMD_SERVICE_PATH"
+assert_contains "OnUnitActiveSec=14400s" "$SYSTEMD_TIMER_PATH"
 
 cat <<EOF
-Smoke test passed.
+Linux smoke test passed.
 
 Temp root: $TMP_ROOT
 Dashboard output: $DASHBOARD_DIR/index.html
-SwiftBar output: $TMP_ROOT/swiftbar.txt
+Service file: $SYSTEMD_SERVICE_PATH
+Timer file: $SYSTEMD_TIMER_PATH
 EOF

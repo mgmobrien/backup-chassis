@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Backup periodically
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=14400s
+Persistent=true
+Unit=system3-backup.service
+
+[Install]
+WantedBy=timers.target

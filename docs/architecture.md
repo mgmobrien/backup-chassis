@@ -24,6 +24,14 @@ In the current local deployment, those map to:
 - SwiftBar plus an HTML dashboard
 - periodic `restic check` plus restore canary verification
 
+In the first Linux adapter lane, those map to:
+
+- `restic`
+- operator-chosen backend
+- `systemd --user`
+- HTML dashboard
+- periodic `restic check` plus restore canary verification
+
 ## Chassis vs bolt-ons
 
 This repository should contain chassis, not bolt-ons.
@@ -71,6 +79,7 @@ Within the public surface:
 
 - `README.md` is the compact overview
 - `docs/architecture.md` is the deeper reference description
+- `docs/install-linux.md` is the first Linux setup path
 - `docs/install-macos.md` is the first operator-facing setup path
 - `docs/portability.md` defines the portable-core vs adapter boundary
 - future install/runbook docs should explain setup and operation for a new user
@@ -99,7 +108,7 @@ boundary:
 
 - portable core: env loading, backup execution, verification logic, state-file generation, dashboard rendering
 - macOS adapter: `launchd`, SwiftBar, `caffeinate`, `osascript`, and the current install/bootstrap path
-- future Linux adapter: separate scheduler + operator-surface contract, not conditionals pasted through the current macOS scripts
+- Linux adapter: `systemd --user` plus dashboard-oriented operation, kept separate from the current macOS scripts instead of folded into them as conditionals
 
 That split is described in `docs/portability.md`.
 

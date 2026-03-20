@@ -11,6 +11,7 @@ Checks host prerequisites for backup-chassis.
 
 Modes:
   --portable-core   Check only the portable runtime prerequisites
+  --linux-adapter   Check the current Linux adapter prerequisites
   -h, --help        Show this help
 
 Default behavior checks the current macOS deployment surface.
@@ -21,6 +22,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --portable-core)
             MODE="portable-core"
+            shift
+            ;;
+        --linux-adapter)
+            MODE="linux-adapter"
             shift
             ;;
         -h|--help)
@@ -47,6 +52,11 @@ macos_required_commands=(
     plutil
 )
 
+linux_required_commands=(
+    systemctl
+    systemd-analyze
+)
+
 macos_optional_commands=(
     caffeinate
     osascript
@@ -66,6 +76,15 @@ echo "======================"
 if [[ "$MODE" == "portable-core" ]]; then
     echo "scope: portable core"
     echo "os: info ($(uname -s))"
+elif [[ "$MODE" == "linux-adapter" ]]; then
+    echo "scope: Linux adapter"
+    if [[ "$(uname -s)" == "Linux" ]]; then
+        echo "os: ok (Linux)"
+    else
+        echo "os: missing (requires Linux)"
+        failures=$((failures + 1))
+    fi
+    required_commands+=("${linux_required_commands[@]}")
 else
     echo "scope: macOS deployment"
     if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -92,6 +111,8 @@ echo
 echo "optional components:"
 if [[ "$MODE" == "portable-core" ]]; then
     echo "  skipped   macOS adapter checks"
+elif [[ "$MODE" == "linux-adapter" ]]; then
+    echo "  skipped   Linux desktop integration checks"
 else
     for command_name in "${macos_optional_commands[@]}"; do
         if command -v "$command_name" >/dev/null 2>&1; then

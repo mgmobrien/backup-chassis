@@ -1,0 +1,14 @@
+[Unit]
+Description=Backup chassis job
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/ABSOLUTE/PATH/TO/backup-chassis
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=SYSTEM3_BACKUP_ENV_FILE=/ABSOLUTE/PATH/TO/system3-backup.env
+ExecStart=/ABSOLUTE/PATH/TO/backup-chassis/bin/system3-backup-backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

@@ -20,6 +20,7 @@ SCHEDULER_PLIST="${SYSTEM3_BACKUP_SCHEDULER_PLIST:-}"
 HC_DETAILS_URL="${SYSTEM3_BACKUP_HEALTHCHECKS_CHECK_URL:-${HEALTHCHECKS_DETAILS_URL:-}}"
 STORAGE_URL="${SYSTEM3_BACKUP_STORAGE_URL:-}"
 VERIFY_PROCESS_MATCH="${SYSTEM3_BACKUP_VERIFY_PROCESS_MATCH:-}"
+BACKUP_PROCESS_MATCH="${SYSTEM3_BACKUP_BACKUP_PROCESS_MATCH:-restic backup}"
 
 if [[ -z "$SNAPSHOT_MATCH_PATH" && -f "$SYSTEM3_BACKUP_PATHS_FILE" ]]; then
     SNAPSHOT_MATCH_PATH="$(
@@ -90,7 +91,10 @@ PY
     )"
 fi
 
-RESTIC_PID="$(pgrep -f "restic backup" 2>/dev/null | head -1 || true)"
+RESTIC_PID=""
+if [[ -n "$BACKUP_PROCESS_MATCH" ]]; then
+    RESTIC_PID="$(pgrep -f "$BACKUP_PROCESS_MATCH" 2>/dev/null | head -1 || true)"
+fi
 UPLOAD_STATE="none"
 if [[ -n "$RESTIC_PID" ]]; then
     PROC_STAT="$(ps -p "$RESTIC_PID" -o stat= 2>/dev/null || true)"
@@ -622,9 +626,9 @@ echo "---"
 # section 2: actions
 
 if [[ "$UPLOAD_STATE" == "running" ]]; then
-    echo "Pause upload | bash=/bin/bash param1=-lc param2='pkill -STOP -f \"restic backup\"' terminal=false refresh=true"
+    echo "Pause upload | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "pkill -STOP -f \"$BACKUP_PROCESS_MATCH\"") terminal=false refresh=true"
 elif [[ "$UPLOAD_STATE" == "paused" ]]; then
-    echo "Resume upload | bash=/bin/bash param1=-lc param2='pkill -CONT -f \"restic backup\"' terminal=false refresh=true color=#34C759"
+    echo "Resume upload | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "pkill -CONT -f \"$BACKUP_PROCESS_MATCH\"") terminal=false refresh=true color=#34C759"
 else
     echo "Run backup now | bash=$BACKUP_COMMAND terminal=true refresh=true"
 fi

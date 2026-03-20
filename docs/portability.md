@@ -64,9 +64,21 @@ The right pattern is explicit adapters, not platform sprawl.
 
 ## Linux
 
-Linux is the next plausible target, but not a current claim.
+Linux is now the first non-macOS adapter lane in the repo.
 
-If Linux work starts, the intended shape is:
+Current Linux support means:
+
+- `systemd --user` install/bootstrap
+- dashboard-oriented operation
+- CI-backed validation of the generated Linux install surface
+
+It does not yet mean:
+
+- a Linux tray/menu integration
+- Matt-local dogfood deployment
+- parity with the current macOS operator surface
+
+The intended continuing shape is:
 
 - keep the portable core contract stable
 - add a Linux scheduler adapter, likely `systemd`
