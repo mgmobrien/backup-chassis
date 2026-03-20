@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DETAIL="${1:-}"
+TITLE="${2:-${SYSTEM3_BACKUP_DISPLAY_NAME:-Backup}}"
+
+if [[ -z "$DETAIL" ]]; then
+    echo "Usage: system3-backup-notify-linux MESSAGE [TITLE]" >&2
+    exit 2
+fi
+
+if ! command -v notify-send >/dev/null 2>&1; then
+    exit 0
+fi
+
+notify-send --app-name="backup-chassis" "$TITLE" "$DETAIL" >/dev/null 2>&1 || true

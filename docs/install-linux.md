@@ -6,6 +6,8 @@ It uses:
 
 - the portable backup / verify / dashboard runtime from the repo
 - `systemd --user` for scheduling
+- `systemd-inhibit` via a bundled adapter wrapper when available
+- `notify-send` via a bundled adapter when available
 - the HTML dashboard as the operator surface
 
 It does not currently include a Linux tray integration.
@@ -52,13 +54,15 @@ The installer writes:
 - a `systemd --user` service
 - a `systemd --user` timer
 
-The generated Linux env leaves the macOS-specific adapter hooks empty:
+The generated Linux env now points at bundled Linux adapter hooks:
 
-- `SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT=""`
-- `SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT=""`
+- `SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT="$REPO_ROOT/bin/system3-backup-wrap-systemd-inhibit"`
+- `SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT="$REPO_ROOT/bin/system3-backup-notify-linux"`
 
-That keeps the Linux install on the portable core plus `systemd` adapter path
-without pretending Linux already has a tray or local notification surface.
+Those adapters keep Linux on the portable core plus `systemd` path while adding
+the first step of local operational parity. If `systemd-inhibit` or
+`notify-send` is unavailable, the bundled wrappers degrade quietly instead of
+failing the backup run.
 
 And validates:
 

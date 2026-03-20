@@ -52,7 +52,7 @@ Today this chassis supports:
 Adapter-specific requirements:
 
 - macOS: `launchctl`, `plutil`; SwiftBar is optional if you want the menubar surface
-- Linux: `systemctl`, `systemd-analyze`; there is no Linux tray surface yet
+- Linux: `systemctl`, `systemd-analyze`; `systemd-inhibit` and `notify-send` are optional for the richer Linux adapter path, and there is still no Linux tray surface yet
 
 ## Current status
 
@@ -136,10 +136,14 @@ The extracted runtime now includes:
 - `bin/system3-backup-install-linux`
 - `bin/system3-backup-install-macos`
 - `bin/system3-backup-linux-smoke-test`
+- `bin/system3-backup-notify-linux`
+- `bin/system3-backup-notify-macos`
 - `bin/system3-backup-smoke-test`
 - `bin/system3-backup-swiftbar`
 - `bin/system3-backup-verify`
 - `bin/system3-backup-env.sh`
+- `bin/system3-backup-wrap-caffeinate`
+- `bin/system3-backup-wrap-systemd-inhibit`
 
 The runtime command namespace remains `system3-backup-*` for now so the
 current live installation can keep dogfooding the extracted repo without a
@@ -157,6 +161,10 @@ paths into the public chassis.
 There is also now a first Linux bootstrap path that can lay down a local config
 surface plus `systemd --user` service/timer files without pretending the Linux
 operator surface is already as rich as the macOS one.
+
+That Linux lane now also has bundled `systemd-inhibit` and `notify-send`
+adapter hooks, so it can take a first step toward local operational parity
+without pushing more platform conditionals into the portable core.
 
 The portable core no longer calls `caffeinate` or `osascript` directly.
 Those behaviors now live behind explicit adapter-script hooks so the core can

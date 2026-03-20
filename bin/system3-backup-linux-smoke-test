@@ -146,7 +146,9 @@ echo "validate generated unit files"
 systemd-analyze verify "$SYSTEMD_SERVICE_PATH" "$SYSTEMD_TIMER_PATH" >/dev/null
 
 echo "validate generated config"
-SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-backup" --check-config >/dev/null
+SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-backup" --check-config > "$TMP_ROOT/check-config.txt"
+assert_contains "run_wrapper_script=$REPO_ROOT/bin/system3-backup-wrap-systemd-inhibit" "$TMP_ROOT/check-config.txt"
+assert_contains "failure_notify_script=$REPO_ROOT/bin/system3-backup-notify-linux" "$TMP_ROOT/check-config.txt"
 
 echo "render dashboard"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-dashboard" >/dev/null

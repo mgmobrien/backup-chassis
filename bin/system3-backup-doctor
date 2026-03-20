@@ -57,6 +57,11 @@ linux_required_commands=(
     systemd-analyze
 )
 
+linux_optional_commands=(
+    systemd-inhibit
+    notify-send
+)
+
 macos_optional_commands=(
     caffeinate
     osascript
@@ -112,7 +117,24 @@ echo "optional components:"
 if [[ "$MODE" == "portable-core" ]]; then
     echo "  skipped   macOS adapter checks"
 elif [[ "$MODE" == "linux-adapter" ]]; then
-    echo "  skipped   Linux desktop integration checks"
+    for command_name in "${linux_optional_commands[@]}"; do
+        if command -v "$command_name" >/dev/null 2>&1; then
+            printf '  ok       %s -> %s\n' "$command_name" "$(command -v "$command_name")"
+        else
+            printf '  missing  %s\n' "$command_name"
+        fi
+    done
+    if [[ -x "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/system3-backup-wrap-systemd-inhibit" ]]; then
+        echo "  ok       bundled systemd-inhibit wrapper"
+    else
+        echo "  missing  bundled systemd-inhibit wrapper"
+    fi
+    if [[ -x "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/system3-backup-notify-linux" ]]; then
+        echo "  ok       bundled Linux notify adapter"
+    else
+        echo "  missing  bundled Linux notify adapter"
+    fi
+    echo "  skipped   Linux tray integration checks"
 else
     for command_name in "${macos_optional_commands[@]}"; do
         if command -v "$command_name" >/dev/null 2>&1; then

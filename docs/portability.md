@@ -70,6 +70,7 @@ Linux is now the first non-macOS adapter lane in the repo.
 Current Linux support means:
 
 - `systemd --user` install/bootstrap
+- bundled `systemd-inhibit` and `notify-send` adapter hooks
 - dashboard-oriented operation
 - CI-backed validation of the generated Linux install surface
 

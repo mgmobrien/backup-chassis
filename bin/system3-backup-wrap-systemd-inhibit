@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -eq 0 ]]; then
+    echo "Usage: system3-backup-wrap-systemd-inhibit COMMAND [ARGS...]" >&2
+    exit 2
+fi
+
+if command -v systemd-inhibit >/dev/null 2>&1; then
+    exec systemd-inhibit --what=sleep --why="backup-chassis backup" "$@"
+fi
+
+exec "$@"

@@ -147,7 +147,8 @@ echo "validate generated plugin shell"
 bash -n "$SWIFTBAR_PLUGIN_PATH"
 
 echo "validate generated config"
-SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-backup" --check-config >/dev/null
+SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-backup" --check-config > "$TMP_ROOT/check-config.txt"
+assert_contains "run_wrapper_script=$REPO_ROOT/bin/system3-backup-wrap-caffeinate" "$TMP_ROOT/check-config.txt"
 
 echo "render dashboard"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-dashboard" >/dev/null
