@@ -243,7 +243,7 @@ else
 fi
 
 echo "---"
-echo "**${DISPLAY_NAME}** | md=true size=14 color=#111 sfimage=externaldrive.badge.checkmark sfcolor=#111"
+echo "${DISPLAY_NAME} | size=14 color=#111 sfimage=externaldrive.badge.checkmark sfcolor=#111"
 echo "---"
 
 # section 1: status
