@@ -20,6 +20,7 @@ MONITOR_LABEL="$SYSTEM3_BACKUP_MONITOR_LABEL"
 ENCRYPTION_LABEL="$SYSTEM3_BACKUP_ENCRYPTION_LABEL"
 CREDENTIALS_LABEL="$SYSTEM3_BACKUP_CREDENTIALS_LABEL"
 RUNTIME_ENTRYPOINT="${SYSTEM3_BACKUP_RUNTIME_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-backup}"
+STATUS_COMMAND="${SYSTEM3_BACKUP_STATUS_COMMAND:-$SCRIPT_DIR/system3-backup-status}"
 BACKUP_PID_FILE="$SYSTEM3_BACKUP_PID_FILE"
 
 mkdir -p "$DASH_DIR"
@@ -75,6 +76,11 @@ if [[ -f "$VERIFY_STATUS_FILE" ]]; then
     VERIFY_JSON="$(cat "$VERIFY_STATUS_FILE")"
 fi
 
+SUMMARY_JSON="$("$STATUS_COMMAND" --json 2>/dev/null || true)"
+if [[ -z "$SUMMARY_JSON" ]]; then
+    SUMMARY_JSON="{}"
+fi
+
 LATEST_LOG="$(ls -t "$SYSTEM3_BACKUP_LOG_DIR"/backup-*.log 2>/dev/null | head -1 || true)"
 LOG_TAIL=""
 if [[ -n "$LATEST_LOG" ]]; then
@@ -100,7 +106,7 @@ PY
 )"
 fi
 
-export SNAPSHOTS_JSON STATUS_JSON VERIFY_JSON RUNNING_PID LOG_TAIL HC_DETAILS_URL
+export SNAPSHOTS_JSON STATUS_JSON VERIFY_JSON SUMMARY_JSON RUNNING_PID LOG_TAIL HC_DETAILS_URL
 export DISPLAY_NAME STORAGE_LABEL SCHEDULER_LABEL SCHEDULE_LABEL MONITOR_LABEL
 export ENCRYPTION_LABEL CREDENTIALS_LABEL RUNTIME_ENTRYPOINT PATHS_TEXT
 export SYSTEM3_BACKUP_STATUS_FILE="$STATUS_FILE"
@@ -121,6 +127,7 @@ from datetime import datetime, timedelta
 snapshots = json.loads(os.environ.get("SNAPSHOTS_JSON", "[]"))
 status = json.loads(os.environ.get("STATUS_JSON", "{}"))
 verify = json.loads(os.environ.get("VERIFY_JSON", "{}"))
+status_summary = json.loads(os.environ.get("SUMMARY_JSON", "{}"))
 running_pid = os.environ.get("RUNNING_PID", "")
 log_tail = os.environ.get("LOG_TAIL", "")
 hc_details_url = os.environ.get("HC_DETAILS_URL", "")
@@ -182,16 +189,16 @@ snap_data = []
 latest_full = None
 for snap in sorted(snapshots, key=lambda item: item["time"], reverse=True):
     dt = datetime.strptime(snap["time"][:19], "%Y-%m-%dT%H:%M:%S")
-    summary = snap.get("summary", {})
+    snapshot_summary = snap.get("summary", {})
     is_full = match_path in snap.get("paths", []) if match_path else True
     row = {
         "id": snap["short_id"],
         "time": dt.strftime("%Y-%m-%d %H:%M"),
         "age_h": round((now - dt).total_seconds() / 3600, 1),
         "is_full": is_full,
-        "files": summary.get("total_files_processed", 0),
-        "size_gb": round(summary.get("total_bytes_processed", 0) / 1024**3, 2),
-        "added_mb": round(summary.get("data_added", 0) / 1024**2, 1),
+        "files": snapshot_summary.get("total_files_processed", 0),
+        "size_gb": round(snapshot_summary.get("total_bytes_processed", 0) / 1024**3, 2),
+        "added_mb": round(snapshot_summary.get("data_added", 0) / 1024**2, 1),
     }
     snap_data.append(row)
     if is_full and latest_full is None:
@@ -234,89 +241,24 @@ verify_check_dt = parse_time(verify.get("last_check_ok_at", ""))
 verify_restore_dt = parse_time(verify.get("last_restore_ok_at", ""))
 verify_check_age = age_label(verify_check_dt)
 verify_restore_age = age_label(verify_restore_dt)
-verify_health = "missing"
-verify_text = "No verification record"
-verify_detail_text = verify_detail or "Run verification now to create the first recoverability proof."
-verify_color = "#FF9500"
+def color_for_health(health):
+    if health == "ok":
+        return "#34C759"
+    if health == "running":
+        return "#007AFF"
+    if health in ("warning", "stale", "missing"):
+        return "#FF9500"
+    return "#FF3B30"
 
-if verify_state == "failed":
-    verify_health = "failed"
-    verify_text = "Verification failed"
-    verify_detail_text = verify_detail or "The last integrity check or restore drill failed."
-    verify_color = "#FF3B30"
-elif verify_state == "running":
-    verify_health = "running"
-    verify_text = "Verification running"
-    verify_detail_text = verify_detail or f"{display_name} is proving recoverability right now."
-    verify_color = "#007AFF"
-elif verify_check_dt and verify_restore_dt:
-    check_age_days = (now - verify_check_dt).total_seconds() / 86400
-    restore_age_days = (now - verify_restore_dt).total_seconds() / 86400
-    if check_age_days <= 10 and restore_age_days <= 40:
-        verify_health = "ok"
-        verify_text = "Recoverability verified"
-        verify_detail_text = f"Integrity {verify_check_age} · restore {verify_restore_age}"
-        verify_color = "#34C759"
-    else:
-        verify_health = "stale"
-        overdue = []
-        if check_age_days > 10:
-            overdue.append("integrity check overdue")
-        if restore_age_days > 40:
-            overdue.append("restore drill overdue")
-        verify_text = "Verification stale"
-        verify_detail_text = " · ".join(overdue) if overdue else "Recoverability proof is stale."
-elif verify_check_dt or verify_restore_dt:
-    verify_health = "stale"
-    verify_text = "Verification incomplete"
-    verify_detail_text = "Waiting for the first full integrity check and restore drill pair."
+verify_health = status_summary.get("verify_health", "missing")
+verify_text = status_summary.get("verify_text", "No verification record")
+verify_detail_text = status_summary.get("verify_detail", verify_detail or "Run verification now to create the first recoverability proof.")
+verify_color = color_for_health(verify_health)
 
-if is_uploading:
-    status_color = "#007AFF"
-    status_text = "Backup running"
-    status_detail = f"{int(upload_pct)}% complete · {elapsed_str} elapsed"
-elif verify_state == "running":
-    status_color = "#007AFF"
-    status_text = "Verification running"
-    status_detail = verify_detail_text
-elif current_state == "maintenance_warning":
-    status_color = "#FF9500"
-    status_text = "Maintenance warning"
-    status_detail = f"Snapshot succeeded, cleanup failed · retry {status_next_attempt}"
-elif current_state == "waiting_for_network":
-    status_color = "#FF9500"
-    status_text = "Waiting for network"
-    status_detail = f"Storage unreachable on last attempt · retry {status_next_attempt}"
-elif current_state == "retry_pending":
-    status_color = "#FF9500"
-    status_text = "Retry pending"
-    last_progress = status.get("last_progress", "")
-    progress_detail = f"last progress {last_progress}" if last_progress else "backup attempt failed"
-    status_detail = f"{progress_detail} · retry {status_next_attempt}"
-elif not latest_full:
-    status_color = "#FF3B30"
-    status_text = "No full backup"
-    status_detail = "No completed primary snapshot exists yet"
-elif verify_health == "failed":
-    status_color = "#FF3B30"
-    status_text = "Verification failed"
-    status_detail = verify_detail_text
-elif latest_full_age_h is not None and latest_full_age_h < 8 and verify_health == "ok":
-    status_color = "#34C759"
-    status_text = "Healthy"
-    status_detail = f"Last full backup {latest_full_age} · {verify_detail_text}"
-elif latest_full_age_h is not None and latest_full_age_h < 8:
-    status_color = "#FF9500"
-    status_text = "Backup fresh, proof stale"
-    status_detail = verify_detail_text
-elif latest_full_age_h is not None and latest_full_age_h < 24:
-    status_color = "#FF9500"
-    status_text = "Backup stale"
-    status_detail = f"Last full backup {latest_full_age}"
-else:
-    status_color = "#FF3B30"
-    status_text = "Backup overdue"
-    status_detail = f"Last full backup {latest_full_age}"
+status_health = status_summary.get("status_health", "critical")
+status_text = status_summary.get("status_text", "Backup overdue")
+status_detail = status_summary.get("status_detail", f"Last full backup {latest_full_age}")
+status_color = color_for_health(status_health)
 
 paths_html = "<br>\n  ".join(html.escape(item) for item in paths_text.splitlines() if item.strip())
 
@@ -370,7 +312,7 @@ print(f"""<!DOCTYPE html>
   .speed-label {{ font-size: 11px; color: #888; }}
 </style>
 </head>
-<body class="{'uploading' if is_uploading else ('verifying' if verify_state == 'running' else '')}">
+<body class="{'uploading' if is_uploading else ('verifying' if verify_health == 'running' else '')}">
 
 <h1>{html.escape(display_name)}</h1>
 <p class="subtitle">{html.escape(storage_label)} · Updated {now.strftime('%Y-%m-%d %H:%M')}</p>

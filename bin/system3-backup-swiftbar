@@ -15,6 +15,7 @@ BACKUP_COMMAND="${SYSTEM3_BACKUP_RUNTIME_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-
 VERIFY_COMMAND="${SYSTEM3_BACKUP_VERIFY_SCRIPT:-$SCRIPT_DIR/system3-backup-verify}"
 DASHBOARD_COMMAND="${SYSTEM3_BACKUP_DASHBOARD_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-dashboard}"
 DASHBOARD_OUTPUT="${SYSTEM3_BACKUP_DASHBOARD_OUTPUT:-$SYSTEM3_BACKUP_DASHBOARD_DIR/index.html}"
+STATUS_COMMAND="${SYSTEM3_BACKUP_STATUS_COMMAND:-$SCRIPT_DIR/system3-backup-status}"
 SCHEDULER_SERVICE="${SYSTEM3_BACKUP_SCHEDULER_SERVICE:-}"
 SCHEDULER_PLIST="${SYSTEM3_BACKUP_SCHEDULER_PLIST:-}"
 HC_DETAILS_URL="${SYSTEM3_BACKUP_HEALTHCHECKS_CHECK_URL:-${HEALTHCHECKS_DETAILS_URL:-}}"
@@ -91,6 +92,47 @@ except Exception:
 PY
     )"
 fi
+
+SUMMARY_JSON="$("$STATUS_COMMAND" --json 2>/dev/null || true)"
+if [[ -z "$SUMMARY_JSON" ]]; then
+    SUMMARY_JSON="{}"
+fi
+SUMMARY_INFO="$(
+    STATUS_SUMMARY_JSON="$SUMMARY_JSON" python3 - <<'PY'
+import json
+import os
+
+try:
+    data = json.loads(os.environ.get("STATUS_SUMMARY_JSON", "{}"))
+except Exception:
+    data = {}
+
+latest_age = data.get("latest_full_age", "")
+latest_title = latest_age[:-4] if latest_age.endswith(" ago") else latest_age
+
+for key in (
+    "status_health",
+    "status_text",
+    "status_detail",
+    "verify_health",
+    "verify_text",
+    "verify_detail",
+    "latest_full_age",
+    "latest_full_snapshot",
+):
+    print(data.get(key, ""))
+print(latest_title)
+PY
+)"
+SUMMARY_STATUS_HEALTH="$(echo "$SUMMARY_INFO" | sed -n '1p')"
+SUMMARY_STATUS_TEXT="$(echo "$SUMMARY_INFO" | sed -n '2p')"
+SUMMARY_STATUS_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '3p')"
+SUMMARY_VERIFY_HEALTH="$(echo "$SUMMARY_INFO" | sed -n '4p')"
+SUMMARY_VERIFY_TEXT="$(echo "$SUMMARY_INFO" | sed -n '5p')"
+SUMMARY_VERIFY_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '6p')"
+SUMMARY_LATEST_FULL_AGE="$(echo "$SUMMARY_INFO" | sed -n '7p')"
+SUMMARY_LATEST_FULL_SNAPSHOT="$(echo "$SUMMARY_INFO" | sed -n '8p')"
+SUMMARY_LATEST_FULL_TITLE="$(echo "$SUMMARY_INFO" | sed -n '9p')"
 
 RESTIC_PID=""
 RESTIC_PID="$(pid_from_file "$BACKUP_PID_FILE" || true)"
@@ -249,27 +291,21 @@ PY
     LAST_FULL_SNAPSHOT="$(echo "$LAST_FULL_INFO" | sed -n '4p')"
 fi
 
-VERIFY_HEALTH="missing"
 VERIFY_CHECK_AGE="never"
 VERIFY_RESTORE_AGE="never"
-VERIFY_SUMMARY="No verification record yet"
-VERIFY_DETAIL="Run verification now to create the first recoverability proof."
+VERIFY_SUMMARY="$SUMMARY_VERIFY_TEXT"
+VERIFY_DETAIL="$SUMMARY_VERIFY_DETAIL"
 if [[ -f "$VERIFY_STATUS_FILE" ]]; then
     VERIFY_INFO="$(
-        CHECK_INTERVAL_DAYS="$SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS" \
-        RESTORE_INTERVAL_DAYS="$SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS" \
         python3 - "$VERIFY_STATUS_FILE" <<'PY'
 import json
-import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 path = sys.argv[1]
 with open(path) as f:
     data = json.load(f)
 
-check_interval_days = int(os.environ["CHECK_INTERVAL_DAYS"])
-restore_interval_days = int(os.environ["RESTORE_INTERVAL_DAYS"])
 now = datetime.now(timezone.utc)
 
 def parse_time(value):
@@ -292,58 +328,16 @@ def age_label(dt):
         return f"{total_seconds // 3600}h ago"
     return f"{max(1, total_seconds // 86400)}d ago"
 
-state = data.get("state", "")
-detail = data.get("detail", "") or "Run verification now to create the first recoverability proof."
 check_dt = parse_time(data.get("last_check_ok_at", ""))
 restore_dt = parse_time(data.get("last_restore_ok_at", ""))
 check_age = age_label(check_dt)
 restore_age = age_label(restore_dt)
-check_due = parse_time(data.get("next_check_due_at", "")) or (check_dt + timedelta(days=check_interval_days) if check_dt else None)
-restore_due = parse_time(data.get("next_restore_due_at", "")) or (restore_dt + timedelta(days=restore_interval_days) if restore_dt else None)
-
-health = "missing"
-summary = "No verification record yet"
-summary_detail = detail
-
-if state == "failed":
-    health = "failed"
-    summary = "Verification failed"
-    summary_detail = detail or "The last integrity check or restore drill failed."
-elif state == "running":
-    health = "running"
-    summary = "Verification running"
-    summary_detail = detail or "Recoverability proof is in progress."
-elif check_dt and restore_dt:
-    if (check_due is None or now <= check_due) and (restore_due is None or now <= restore_due):
-        health = "ok"
-        summary = "Recoverability proof current"
-        summary_detail = f"Integrity {check_age} · restore {restore_age}"
-    else:
-        health = "stale"
-        overdue = []
-        if check_due and now > check_due:
-            overdue.append("integrity check overdue")
-        if restore_due and now > restore_due:
-            overdue.append("restore drill overdue")
-        summary = "Verification stale"
-        summary_detail = " · ".join(overdue) if overdue else "Recoverability proof is stale."
-elif check_dt or restore_dt:
-    health = "stale"
-    summary = "Verification incomplete"
-    summary_detail = "Waiting for the first full integrity check and restore drill pair."
-
-print(health)
 print(check_age)
 print(restore_age)
-print(summary)
-print(summary_detail)
 PY
     )"
-    VERIFY_HEALTH="$(echo "$VERIFY_INFO" | sed -n '1p')"
-    VERIFY_CHECK_AGE="$(echo "$VERIFY_INFO" | sed -n '2p')"
-    VERIFY_RESTORE_AGE="$(echo "$VERIFY_INFO" | sed -n '3p')"
-    VERIFY_SUMMARY="$(echo "$VERIFY_INFO" | sed -n '4p')"
-    VERIFY_DETAIL="$(echo "$VERIFY_INFO" | sed -n '5p')"
+    VERIFY_CHECK_AGE="$(echo "$VERIFY_INFO" | sed -n '1p')"
+    VERIFY_RESTORE_AGE="$(echo "$VERIFY_INFO" | sed -n '2p')"
 fi
 
 title_gb_from_status() {
@@ -370,45 +364,29 @@ elif [[ "$UPLOAD_STATE" == "paused" ]]; then
     echo "paused | sfimage=pause.circle.fill sfcolor=FF9500"
 elif [[ "$UPLOAD_STATE" == "running" ]]; then
     echo "running | sfimage=arrow.triangle.2.circlepath sfcolor=007AFF"
-elif [[ "$VERIFY_RUNNING" == "yes" ]]; then
+elif [[ "$SUMMARY_STATUS_HEALTH" == "running" && "$SUMMARY_STATUS_TEXT" == "Verification running" ]]; then
     echo "verify | sfimage=checkmark.shield.fill sfcolor=007AFF"
 elif [[ "$LAUNCHD_LOADED" -eq 0 ]]; then
     echo "pause | sfimage=pause.circle.fill sfcolor=FF9500"
-elif [[ "$CURRENT_STATE" == "maintenance_warning" ]]; then
+elif [[ "$SUMMARY_STATUS_TEXT" == "Maintenance warning" ]]; then
     echo "warn | sfimage=exclamationmark.triangle.fill sfcolor=FF9500"
-elif [[ "$CURRENT_STATE" == "waiting_for_network" ]]; then
+elif [[ "$SUMMARY_STATUS_TEXT" == "Waiting for network" ]]; then
     echo "net | sfimage=wifi.slash sfcolor=FF9500"
-elif [[ "$CURRENT_STATE" == "retry_pending" ]]; then
+elif [[ "$SUMMARY_STATUS_TEXT" == "Retry pending" ]]; then
     echo "retry | sfimage=arrow.clockwise sfcolor=FF9500"
-elif [[ "$HAS_FULL" == "no" ]]; then
-    if [[ "$CURRENT_STATE" == "retry_pending" ]]; then
-        RETRY_PCT="$(
-            python3 - "$STATUS_FILE" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1]) as f:
-    data = json.load(f)
-
-last_progress = data.get("last_progress", "")
-print(last_progress if last_progress else "retry")
-PY
-        )"
-        echo "${RETRY_PCT:-retry} | sfimage=arrow.clockwise sfcolor=FF9500"
-    else
-        echo "none | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
-    fi
+elif [[ "$SUMMARY_STATUS_TEXT" == "No full backup" ]]; then
+    echo "none | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
 else
-    if [[ "$VERIFY_HEALTH" == "failed" ]]; then
+    if [[ "$SUMMARY_STATUS_TEXT" == "Verification failed" ]]; then
         echo "fail | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
-    elif [[ "$LAST_FULL_HOURS" -lt 8 && "$VERIFY_HEALTH" == "ok" ]]; then
+    elif [[ "$SUMMARY_STATUS_HEALTH" == "ok" ]]; then
         echo "| sfimage=checkmark.circle.fill sfcolor=34C759"
-    elif [[ "$LAST_FULL_HOURS" -lt 8 ]]; then
+    elif [[ "$SUMMARY_STATUS_TEXT" == "Backup fresh, proof stale" ]]; then
         echo "proof | sfimage=exclamationmark.triangle.fill sfcolor=FF9500"
-    elif [[ "$LAST_FULL_HOURS" -lt 24 ]]; then
-        echo "${LAST_FULL_TITLE:-stale} | sfimage=clock.fill sfcolor=FF9500"
+    elif [[ "$SUMMARY_STATUS_TEXT" == "Backup stale" ]]; then
+        echo "${SUMMARY_LATEST_FULL_TITLE:-stale} | sfimage=clock.fill sfcolor=FF9500"
     else
-        echo "${LAST_FULL_TITLE:-old} | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
+        echo "${SUMMARY_LATEST_FULL_TITLE:-old} | sfimage=exclamationmark.circle.fill sfcolor=FF3B30"
     fi
 fi
 
@@ -473,15 +451,15 @@ PY
     fi
 elif [[ "$UPLOAD_STATE" != "none" ]]; then
     echo "Backup starting... | color=#007AFF size=14"
-elif [[ "$VERIFY_RUNNING" == "yes" ]]; then
+elif [[ "$SUMMARY_STATUS_HEALTH" == "running" && "$SUMMARY_STATUS_TEXT" == "Verification running" ]]; then
     echo "Verification running | color=#007AFF size=14"
-    if [[ "$HAS_FULL" == "yes" ]]; then
-        echo "  Last full backup: ${LAST_FULL_AGE} | size=13"
+    if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
+        echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
-    echo "  ${VERIFY_DETAIL} | size=13"
+    echo "  ${SUMMARY_STATUS_DETAIL} | size=13"
 elif [[ "$LAUNCHD_LOADED" -eq 0 ]]; then
     echo "Backups paused | color=#FF9500 size=14"
-elif [[ "$CURRENT_STATE" == "maintenance_warning" ]]; then
+elif [[ "$SUMMARY_STATUS_TEXT" == "Maintenance warning" ]]; then
     DETAIL="$(
         python3 - "$STATUS_FILE" <<'PY'
 import json
@@ -517,7 +495,7 @@ PY
     echo "  Retention cleanup failed after snapshot creation | size=13"
     echo "  $(echo "$DETAIL" | sed -n '1p') | size=13 color=#888"
     echo "  $(echo "$DETAIL" | sed -n '2p') | size=13 color=#888"
-elif [[ "$CURRENT_STATE" == "waiting_for_network" ]]; then
+elif [[ "$SUMMARY_STATUS_TEXT" == "Waiting for network" ]]; then
     DETAIL="$(
         python3 - "$STATUS_FILE" <<'PY'
 import json
@@ -556,7 +534,7 @@ PY
     fi
     echo "  $(echo "$DETAIL" | sed -n '1p') | size=13"
     echo "  $(echo "$DETAIL" | sed -n '2p') | size=13 color=#888"
-elif [[ "$CURRENT_STATE" == "retry_pending" ]]; then
+elif [[ "$SUMMARY_STATUS_TEXT" == "Retry pending" ]]; then
     DETAIL="$(
         python3 - "$STATUS_FILE" <<'PY'
 import json
@@ -592,24 +570,28 @@ PY
     fi
     echo "  $(echo "$DETAIL" | sed -n '1p') | size=13"
     echo "  $(echo "$DETAIL" | sed -n '2p') | size=13 color=#888"
-elif [[ "$HAS_FULL" == "no" ]]; then
+elif [[ "$SUMMARY_STATUS_TEXT" == "No full backup" ]]; then
     echo "No full backup exists | color=#FF3B30 size=14"
 else
-    if [[ "$VERIFY_HEALTH" == "failed" ]]; then
+    if [[ "$SUMMARY_STATUS_TEXT" == "Verification failed" ]]; then
         echo "${DISPLAY_NAME} status: verification failed | color=#FF3B30 size=14"
-        echo "  Last full backup: ${LAST_FULL_AGE} | size=13"
-        echo "  ${VERIFY_DETAIL} | size=13"
-    elif [[ "$VERIFY_HEALTH" == "ok" ]]; then
-        echo "${DISPLAY_NAME} status: verified (${LAST_FULL_AGE}) | size=14"
+        if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
+            echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
+        fi
+        echo "  ${SUMMARY_STATUS_DETAIL} | size=13"
+    elif [[ "$SUMMARY_STATUS_HEALTH" == "ok" ]]; then
+        echo "${DISPLAY_NAME} status: verified (${SUMMARY_LATEST_FULL_AGE}) | size=14"
         echo "  Integrity check: ${VERIFY_CHECK_AGE} | size=13"
         echo "  Restore drill: ${VERIFY_RESTORE_AGE} | size=13"
-        echo "  Snapshot ${LAST_FULL_SNAPSHOT} | font=Menlo size=12 color=#888"
+        echo "  Snapshot ${SUMMARY_LATEST_FULL_SNAPSHOT} | font=Menlo size=12 color=#888"
     else
-        echo "${DISPLAY_NAME} status: backup fresh, proof stale | color=#FF9500 size=14"
-        echo "  Last full backup: ${LAST_FULL_AGE} | size=13"
+        echo "${DISPLAY_NAME} status: ${SUMMARY_STATUS_TEXT} | color=#FF9500 size=14"
+        if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
+            echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
+        fi
         echo "  Integrity check: ${VERIFY_CHECK_AGE} | size=13"
         echo "  Restore drill: ${VERIFY_RESTORE_AGE} | size=13"
-        echo "  ${VERIFY_DETAIL} | size=13 color=#888"
+        echo "  ${SUMMARY_STATUS_DETAIL} | size=13 color=#888"
     fi
 fi
 
