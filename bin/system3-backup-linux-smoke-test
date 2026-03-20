@@ -152,7 +152,7 @@ echo "render dashboard"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-dashboard" >/dev/null
 assert_contains "Backup smoke" "$DASHBOARD_DIR/index.html"
 assert_contains "$SMOKE_SNAPSHOT_ID" "$DASHBOARD_DIR/index.html"
-assert_contains "verified" "$DASHBOARD_DIR/index.html"
+assert_contains "Healthy" "$DASHBOARD_DIR/index.html"
 
 echo "assert unit contents"
 assert_contains "ExecStart=$REPO_ROOT/bin/system3-backup-backup" "$SYSTEMD_SERVICE_PATH"
