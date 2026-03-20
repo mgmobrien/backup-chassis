@@ -15,6 +15,18 @@ cohere end to end.
 EOF
 }
 
+assert_contains() {
+    local needle="$1"
+    local haystack="$2"
+
+    if command -v rg >/dev/null 2>&1; then
+        rg -F -q "$needle" "$haystack"
+        return
+    fi
+
+    grep -F -q "$needle" "$haystack"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --keep-temp)
@@ -138,14 +150,14 @@ SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-backup" --che
 
 echo "render dashboard"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-dashboard" >/dev/null
-rg -q "Backup smoke" "$DASHBOARD_DIR/index.html"
-rg -q "$SMOKE_SNAPSHOT_ID" "$DASHBOARD_DIR/index.html"
+assert_contains "Backup smoke" "$DASHBOARD_DIR/index.html"
+assert_contains "$SMOKE_SNAPSHOT_ID" "$DASHBOARD_DIR/index.html"
 
 echo "render menubar"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-swiftbar" > "$TMP_ROOT/swiftbar.txt"
-rg -q "checkmark.circle.fill" "$TMP_ROOT/swiftbar.txt"
-rg -q "Backup smoke status: verified" "$TMP_ROOT/swiftbar.txt"
-rg -q "$SMOKE_SNAPSHOT_ID" "$TMP_ROOT/swiftbar.txt"
+assert_contains "checkmark.circle.fill" "$TMP_ROOT/swiftbar.txt"
+assert_contains "Backup smoke status: verified" "$TMP_ROOT/swiftbar.txt"
+assert_contains "$SMOKE_SNAPSHOT_ID" "$TMP_ROOT/swiftbar.txt"
 
 cat <<EOF
 Smoke test passed.
