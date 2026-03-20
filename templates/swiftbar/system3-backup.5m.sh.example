@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # <swiftbar.hideAbout>true</swiftbar.hideAbout>
+# <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 # <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>
 # <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>
 set -euo pipefail
