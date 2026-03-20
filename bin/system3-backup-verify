@@ -174,12 +174,16 @@ fail_verification() {
 
 latest_snapshot_info() {
     export S3B_SNAPSHOT_MATCH_PATH="$SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH"
-    restic snapshots --json | python3 <<'PY'
+    local snapshot_json=""
+    snapshot_json="$(mktemp "${TMPDIR:-/tmp}/system3-backup-snapshots.XXXXXX.json")"
+    restic snapshots --json > "$snapshot_json"
+    python3 - "$snapshot_json" <<'PY'
 import json
 import os
 import sys
 
-data = json.load(sys.stdin)
+with open(sys.argv[1]) as handle:
+    data = json.load(handle)
 match_path = os.environ.get("S3B_SNAPSHOT_MATCH_PATH", "")
 data.sort(key=lambda snap: snap["time"], reverse=True)
 
@@ -192,6 +196,9 @@ for snap in data:
     print(snap["time"])
     break
 PY
+    local status=$?
+    rm -f "$snapshot_json"
+    return "$status"
 }
 
 ensure_canary
