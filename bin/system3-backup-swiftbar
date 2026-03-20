@@ -418,7 +418,9 @@ elif [[ "$SUMMARY_STATUS_CODE" == "backup_delayed" || "$SUMMARY_STATUS_CODE" == 
     if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
         echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
-    if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
+    if [[ -n "$SUMMARY_NEXT_RUN_LABEL" ]]; then
+        echo "  Next automatic run: ${SUMMARY_NEXT_RUN_LABEL} | size=13"
+    elif [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
         echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
     fi
     echo "  No failure is recorded. This usually catches up on the next wake or scheduled cycle. | size=13 color=#666"
@@ -431,7 +433,9 @@ elif [[ "$SUMMARY_STATUS_CODE" == "backup_overdue" ]]; then
     if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
         echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
-    if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
+    if [[ -n "$SUMMARY_NEXT_RUN_LABEL" ]]; then
+        echo "  Next automatic run: ${SUMMARY_NEXT_RUN_LABEL} | size=13"
+    elif [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
         echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
     fi
     echo "  No active failure is recorded, but backup age is past the quiet window. | size=13 color=#666"
@@ -444,7 +448,9 @@ else
         echo "  ${SUMMARY_STATUS_DETAIL} | size=13"
     elif [[ "$SUMMARY_STATUS_HEALTH" == "ok" ]]; then
         echo "${DISPLAY_NAME} status: verified (${SUMMARY_LATEST_FULL_AGE}) | size=14"
-        if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
+        if [[ -n "$SUMMARY_NEXT_RUN_LABEL" ]]; then
+            echo "  Next automatic run: ${SUMMARY_NEXT_RUN_LABEL} | size=13"
+        elif [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
             echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
         fi
         echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
@@ -455,7 +461,9 @@ else
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
             echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
         fi
-        if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
+        if [[ -n "$SUMMARY_NEXT_RUN_LABEL" ]]; then
+            echo "  Next automatic run: ${SUMMARY_NEXT_RUN_LABEL} | size=13"
+        elif [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
             echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
         fi
         echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
@@ -465,7 +473,9 @@ else
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
             echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
         fi
-        if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
+        if [[ -n "$SUMMARY_NEXT_RUN_LABEL" ]]; then
+            echo "  Next automatic run: ${SUMMARY_NEXT_RUN_LABEL} | size=13"
+        elif [[ -n "$SUMMARY_NEXT_RUN_DETAIL" ]]; then
             echo "  Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13"
         fi
         echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
@@ -549,7 +559,9 @@ fi
 
 echo "Destination: ${SYSTEM3_BACKUP_STORAGE_LABEL} | size=13 color=#888"
 echo "Schedule: ${SYSTEM3_BACKUP_SCHEDULE_LABEL} | size=13 color=#888"
-if [[ -n "$SUMMARY_NEXT_RUN_DETAIL" && "$UPLOAD_STATE" == "none" ]]; then
+if [[ -n "$SUMMARY_NEXT_RUN_LABEL" && "$UPLOAD_STATE" == "none" ]]; then
+    echo "Next automatic run: ${SUMMARY_NEXT_RUN_LABEL} | size=13 color=#888"
+elif [[ -n "$SUMMARY_NEXT_RUN_DETAIL" && "$UPLOAD_STATE" == "none" ]]; then
     echo "Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13 color=#888"
 fi
 echo "Verification: ${SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS}d integrity + ${SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS}d restore canary | size=13 color=#888"

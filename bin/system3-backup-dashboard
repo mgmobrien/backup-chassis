@@ -256,6 +256,8 @@ verify_check_age = status_summary.get("verify_check_age", verify_check_age)
 verify_restore_age = status_summary.get("verify_restore_age", verify_restore_age)
 verify_check_due_detail = status_summary.get("verify_check_due_detail", "scheduled")
 verify_restore_due_detail = status_summary.get("verify_restore_due_detail", "scheduled")
+verify_check_due_label = status_summary.get("verify_check_due_label", verify_check_due_detail)
+verify_restore_due_label = status_summary.get("verify_restore_due_label", verify_restore_due_detail)
 verify_check_present = bool(status_summary.get("verify_check_present", bool(verify_check_dt)))
 verify_restore_present = bool(status_summary.get("verify_restore_present", bool(verify_restore_dt)))
 
@@ -269,6 +271,7 @@ status_next_attempt = status_summary.get("next_attempt_label", status_next_attem
 latest_full_age = status_summary.get("latest_full_age", latest_full_age)
 latest_full_present = bool(status_summary.get("latest_full_present", bool(latest_full)))
 next_run_detail = status_summary.get("next_run_detail", "scheduled")
+next_run_label = status_summary.get("next_run_label", next_run_detail)
 
 paths_html = "<br>\n  ".join(html.escape(item) for item in paths_text.splitlines() if item.strip())
 
@@ -341,12 +344,12 @@ print(f"""<!DOCTYPE html>
   <div class="card">
     <div class="card-label">Integrity proof</div>
     <div class="card-value">{html.escape(verify_check_age if verify_check_present else ('Failed' if verify_health == 'failed' else ('Running' if verify_health == 'running' else 'None yet')))}</div>
-    <div class="card-detail">restic check {html.escape(check_subset)} · next due {html.escape(verify_check_due_detail)}</div>
+    <div class="card-detail">restic check {html.escape(check_subset)} · next {html.escape(verify_check_due_label)}</div>
   </div>
   <div class="card">
     <div class="card-label">Restore proof</div>
     <div class="card-value">{html.escape(verify_restore_age if verify_restore_present else ('Failed' if verify_health == 'failed' else ('Running' if verify_health == 'running' else 'None yet')))}</div>
-    <div class="card-detail">Canary restore drill · next due {html.escape(verify_restore_due_detail)}</div>
+    <div class="card-detail">Canary restore drill · next {html.escape(verify_restore_due_label)}</div>
   </div>
   <div class="card">
     <div class="card-label">Repository</div>
@@ -356,7 +359,7 @@ print(f"""<!DOCTYPE html>
   <div class="card">
     <div class="card-label">Schedule</div>
     <div class="card-value">{html.escape(schedule_label)}</div>
-    <div class="card-detail">Next automatic run {html.escape(next_run_detail)} · {html.escape(check_interval_days)}d integrity · {html.escape(restore_interval_days)}d restore</div>
+    <div class="card-detail">Next automatic run {html.escape(next_run_label)} · {html.escape(check_interval_days)}d integrity · {html.escape(restore_interval_days)}d restore</div>
   </div>
 </div>
 """)
@@ -390,8 +393,8 @@ if verify_health in ("failed", "stale", "missing"):
 <div class="card" style="margin-bottom: 24px; border: 1px solid {verify_color};">
   <div class="card-label">Recoverability warning</div>
   <div class="card-detail" style="color: #ccc; font-size: 13px;">{html.escape(verify_warning)}</div>
-  <div class="card-detail" style="margin-top: 8px;">Integrity proof: {html.escape(verify_check_age)} · next due {html.escape(verify_check_due_detail)}</div>
-  <div class="card-detail" style="margin-top: 4px;">Restore proof: {html.escape(verify_restore_age)} · next due {html.escape(verify_restore_due_detail)}</div>
+  <div class="card-detail" style="margin-top: 8px;">Integrity proof: {html.escape(verify_check_age)} (next {html.escape(verify_check_due_label)})</div>
+  <div class="card-detail" style="margin-top: 4px;">Restore proof: {html.escape(verify_restore_age)} (next {html.escape(verify_restore_due_label)})</div>
 </div>
 """)
 
