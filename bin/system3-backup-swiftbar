@@ -243,7 +243,7 @@ else
 fi
 
 echo "---"
-echo "${DISPLAY_NAME} | size=14 color=#444 sfimage=externaldrive.badge.checkmark"
+echo "**${DISPLAY_NAME}** | md=true size=14 color=#111 sfimage=externaldrive.badge.checkmark sfcolor=#111"
 echo "---"
 
 # section 1: status
@@ -589,5 +589,4 @@ if [[ -n "$LATEST_LOG" ]]; then
     echo "Open latest backup log | bash=/usr/bin/open param1=$LATEST_LOG terminal=false"
 fi
 
-echo "---"
 echo "Refresh this menu | refresh=true"
