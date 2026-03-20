@@ -1,0 +1,336 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/system3-backup-env.sh"
+system3_backup_load_env
+
+STATUS_FILE="$SYSTEM3_BACKUP_STATUS_FILE"
+SNAP_CACHE="$SYSTEM3_BACKUP_SNAPSHOTS_CACHE_FILE"
+VERIFY_STATUS_FILE="$SYSTEM3_BACKUP_STATUS_DIR/verification-status.json"
+DISPLAY_NAME="$SYSTEM3_BACKUP_DISPLAY_NAME"
+SNAPSHOT_MATCH_PATH="${SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH:-}"
+BACKUP_PID_FILE="$SYSTEM3_BACKUP_PID_FILE"
+VERIFY_PID_FILE="$SYSTEM3_BACKUP_VERIFY_PID_FILE"
+
+if [[ -z "$SNAPSHOT_MATCH_PATH" && -f "$SYSTEM3_BACKUP_PATHS_FILE" ]]; then
+    SNAPSHOT_MATCH_PATH="$(
+        python3 - "$SYSTEM3_BACKUP_PATHS_FILE" <<'PY'
+import sys
+
+path_file = sys.argv[1]
+try:
+    with open(path_file) as handle:
+        for raw in handle:
+            line = raw.strip()
+            if line and not line.startswith("#"):
+                print(line)
+                break
+except FileNotFoundError:
+    pass
+PY
+    )"
+fi
+
+pid_from_file() {
+    local pid_file="$1"
+    local pid=""
+
+    [[ -f "$pid_file" ]] || return 1
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    [[ -n "$pid" ]] || return 1
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "$pid"
+        return 0
+    fi
+    return 1
+}
+
+MISSING_CREDENTIAL_VARS=()
+while IFS= read -r missing_var; do
+    [[ -z "$missing_var" ]] && continue
+    MISSING_CREDENTIAL_VARS+=("$missing_var")
+done < <(system3_backup_missing_runtime_credentials)
+
+BACKUP_PID="$(pid_from_file "$BACKUP_PID_FILE" || true)"
+VERIFY_PID="$(pid_from_file "$VERIFY_PID_FILE" || true)"
+
+SNAPSHOTS_JSON=""
+STALE_SNAPSHOTS_JSON=""
+if [[ -f "$SNAP_CACHE" ]]; then
+    STALE_SNAPSHOTS_JSON="$(cat "$SNAP_CACHE")"
+    CACHE_AGE="$(
+        python3 - "$SNAP_CACHE" <<'PY'
+import os
+import sys
+import time
+
+path = sys.argv[1]
+try:
+    age = max(0, int(time.time() - os.path.getmtime(path)))
+except OSError:
+    age = 999999999
+print(age)
+PY
+    )"
+    if [[ "$CACHE_AGE" -lt 21600 ]]; then
+        SNAPSHOTS_JSON="$STALE_SNAPSHOTS_JSON"
+    fi
+fi
+if [[ -z "$SNAPSHOTS_JSON" ]]; then
+    LIVE_SNAPSHOTS_JSON="$(restic snapshots --json 2>/dev/null || echo "")"
+    if [[ -n "$LIVE_SNAPSHOTS_JSON" && "$LIVE_SNAPSHOTS_JSON" != "[]" ]]; then
+        SNAPSHOTS_JSON="$LIVE_SNAPSHOTS_JSON"
+    elif [[ -n "$STALE_SNAPSHOTS_JSON" ]]; then
+        SNAPSHOTS_JSON="$STALE_SNAPSHOTS_JSON"
+    else
+        SNAPSHOTS_JSON="[]"
+    fi
+fi
+
+STATUS_JSON="{}"
+if [[ -f "$STATUS_FILE" ]]; then
+    STATUS_JSON="$(cat "$STATUS_FILE")"
+fi
+
+VERIFY_JSON="{}"
+if [[ -f "$VERIFY_STATUS_FILE" ]]; then
+    VERIFY_JSON="$(cat "$VERIFY_STATUS_FILE")"
+fi
+
+export SYSTEM3_BACKUP_STATUS_JSON="$STATUS_JSON"
+export SYSTEM3_BACKUP_VERIFY_JSON="$VERIFY_JSON"
+export SYSTEM3_BACKUP_SNAPSHOTS_JSON="$SNAPSHOTS_JSON"
+export SYSTEM3_BACKUP_DISPLAY_NAME="$DISPLAY_NAME"
+export SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH="$SNAPSHOT_MATCH_PATH"
+export SYSTEM3_BACKUP_BACKUP_PID="$BACKUP_PID"
+export SYSTEM3_BACKUP_VERIFY_PID="$VERIFY_PID"
+export SYSTEM3_BACKUP_MISSING_CREDENTIALS="$(IFS=,; echo "${MISSING_CREDENTIAL_VARS[*]}")"
+
+python3 <<'PY'
+import json
+import os
+from datetime import datetime, timezone
+
+display_name = os.environ.get("SYSTEM3_BACKUP_DISPLAY_NAME", "Backup")
+match_path = (os.environ.get("SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH") or "").rstrip("/")
+backup_pid = os.environ.get("SYSTEM3_BACKUP_BACKUP_PID", "")
+verify_pid = os.environ.get("SYSTEM3_BACKUP_VERIFY_PID", "")
+missing_credentials = [item for item in os.environ.get("SYSTEM3_BACKUP_MISSING_CREDENTIALS", "").split(",") if item]
+
+try:
+    status = json.loads(os.environ.get("SYSTEM3_BACKUP_STATUS_JSON", "{}"))
+except Exception:
+    status = {}
+try:
+    verify = json.loads(os.environ.get("SYSTEM3_BACKUP_VERIFY_JSON", "{}"))
+except Exception:
+    verify = {}
+try:
+    snapshots = json.loads(os.environ.get("SYSTEM3_BACKUP_SNAPSHOTS_JSON", "[]"))
+except Exception:
+    snapshots = []
+
+now = datetime.now(timezone.utc)
+
+def parse_time(value):
+    if not value:
+        return None
+    raw = value.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+def age_label(dt):
+    if not dt:
+        return "none"
+    diff = now - dt
+    total_seconds = max(0, int(diff.total_seconds()))
+    if total_seconds < 3600:
+        return f"{max(1, total_seconds // 60)}m ago"
+    if total_seconds < 86400:
+        return f"{total_seconds // 3600}h ago"
+    return f"{max(1, total_seconds // 86400)}d ago"
+
+def title_label(age):
+    if not age:
+        return ""
+    return age[:-4] if age.endswith(" ago") else age
+
+def fmt_next_attempt(value):
+    dt = parse_time(value)
+    if not dt:
+        return "scheduled"
+    diff = dt - now
+    minutes = max(0, int(diff.total_seconds() / 60))
+    if minutes >= 60:
+        return f"in ~{minutes // 60}h {minutes % 60}m"
+    return f"in ~{minutes}m"
+
+def snapshot_matches(snapshot):
+    paths = [path.rstrip("/") for path in snapshot.get("paths", [])]
+    if not match_path:
+        return bool(paths)
+    return match_path in paths
+
+latest_full = None
+for snapshot in sorted(snapshots, key=lambda item: item.get("time", ""), reverse=True):
+    if snapshot_matches(snapshot):
+        latest_full = snapshot
+        break
+
+latest_full_dt = None
+latest_full_snapshot = ""
+latest_full_age = "none"
+latest_full_age_h = None
+latest_full_time = ""
+if latest_full:
+    latest_full_dt = parse_time(latest_full.get("time", ""))
+    latest_full_snapshot = latest_full.get("short_id", "")
+    latest_full_age = age_label(latest_full_dt)
+    latest_full_time = latest_full.get("time", "")
+    if latest_full_dt:
+        latest_full_age_h = max(0, int((now - latest_full_dt).total_seconds() / 3600))
+
+status_completed_dt = parse_time(status.get("completed_at", ""))
+if status_completed_dt:
+    latest_full_dt = status_completed_dt
+    latest_full_age = age_label(latest_full_dt)
+    latest_full_time = status.get("completed_at", latest_full_time)
+    latest_full_age_h = max(0, int((now - latest_full_dt).total_seconds() / 3600))
+
+verify_state = verify.get("state", "")
+verify_detail = verify.get("detail", "")
+verify_check_dt = parse_time(verify.get("last_check_ok_at", ""))
+verify_restore_dt = parse_time(verify.get("last_restore_ok_at", ""))
+verify_check_age = age_label(verify_check_dt)
+verify_restore_age = age_label(verify_restore_dt)
+verify_health = "missing"
+verify_text = "No verification record"
+verify_detail_text = verify_detail or "Run verification now to create the first recoverability proof."
+
+if verify_state == "failed":
+    verify_health = "failed"
+    verify_text = "Verification failed"
+    verify_detail_text = verify_detail or "The last integrity check or restore drill failed."
+elif verify_pid or verify_state == "running":
+    verify_health = "running"
+    verify_text = "Verification running"
+    verify_detail_text = verify_detail or "Recoverability proof is in progress."
+elif verify_check_dt and verify_restore_dt:
+    check_age_days = (now - verify_check_dt).total_seconds() / 86400
+    restore_age_days = (now - verify_restore_dt).total_seconds() / 86400
+    if check_age_days <= 10 and restore_age_days <= 40:
+        verify_health = "ok"
+        verify_text = "Recoverability verified"
+        verify_detail_text = f"Integrity {verify_check_age} · restore {verify_restore_age}"
+    else:
+        verify_health = "stale"
+        overdue = []
+        if check_age_days > 10:
+            overdue.append("integrity check overdue")
+        if restore_age_days > 40:
+            overdue.append("restore drill overdue")
+        verify_text = "Verification stale"
+        verify_detail_text = " · ".join(overdue) if overdue else "Recoverability proof is stale."
+elif verify_check_dt or verify_restore_dt:
+    verify_health = "stale"
+    verify_text = "Verification incomplete"
+    verify_detail_text = "Waiting for the first full integrity check and restore drill pair."
+
+current_state = status.get("state", "")
+status_failures = int(status.get("failures", 0) or 0)
+next_attempt_raw = status.get("next_attempt", "")
+status_next_attempt = fmt_next_attempt(next_attempt_raw)
+is_uploading = bool(backup_pid) and current_state in ("uploading", "starting")
+
+status_health = "critical"
+status_text = "Backup overdue"
+status_detail = f"Last full backup {latest_full_age}"
+
+if missing_credentials:
+    status_health = "critical"
+    status_text = "Missing credentials"
+    status_detail = ", ".join(missing_credentials)
+elif is_uploading:
+    status_health = "running"
+    pct = int(status.get("pct", 0) or 0)
+    status_text = "Backup running"
+    status_detail = f"{pct}% complete"
+elif verify_health == "running":
+    status_health = "running"
+    status_text = "Verification running"
+    status_detail = verify_detail_text
+elif current_state == "maintenance_warning":
+    status_health = "warning"
+    status_text = "Maintenance warning"
+    status_detail = f"Snapshot succeeded, cleanup failed · retry {status_next_attempt}"
+elif current_state == "waiting_for_network":
+    status_health = "warning"
+    status_text = "Waiting for network"
+    status_detail = f"Storage unreachable on last attempt · retry {status_next_attempt}"
+elif current_state == "retry_pending":
+    status_health = "warning"
+    last_progress = status.get("last_progress", "")
+    progress_detail = f"last progress {last_progress}" if last_progress else "backup attempt failed"
+    status_text = "Retry pending"
+    status_detail = f"{progress_detail} · retry {status_next_attempt}"
+elif not latest_full:
+    status_health = "critical"
+    status_text = "No full backup"
+    status_detail = "No completed primary snapshot exists yet"
+elif verify_health == "failed":
+    status_health = "critical"
+    status_text = "Verification failed"
+    status_detail = verify_detail_text
+elif latest_full_age_h is not None and latest_full_age_h < 8 and verify_health == "ok":
+    status_health = "ok"
+    status_text = "Healthy"
+    status_detail = f"Last full backup {latest_full_age} · {verify_detail_text}"
+elif latest_full_age_h is not None and latest_full_age_h < 8:
+    status_health = "warning"
+    status_text = "Backup fresh, proof stale"
+    status_detail = verify_detail_text
+elif latest_full_age_h is not None and latest_full_age_h < 24:
+    status_health = "warning"
+    status_text = "Backup stale"
+    status_detail = f"Last full backup {latest_full_age}"
+else:
+    status_health = "critical"
+    status_text = "Backup overdue"
+    status_detail = f"Last full backup {latest_full_age}"
+
+result = {
+    "display_name": display_name,
+    "status_health": status_health,
+    "status_text": status_text,
+    "status_detail": status_detail,
+    "current_state": current_state,
+    "failures": status_failures,
+    "next_attempt": next_attempt_raw,
+    "next_attempt_label": status_next_attempt,
+    "verify_health": verify_health,
+    "verify_text": verify_text,
+    "verify_detail": verify_detail_text,
+    "verify_check_age": verify_check_age,
+    "verify_restore_age": verify_restore_age,
+    "verify_check_present": bool(verify_check_dt),
+    "verify_restore_present": bool(verify_restore_dt),
+    "latest_full_present": bool(latest_full_dt or latest_full),
+    "latest_full_snapshot": latest_full_snapshot,
+    "latest_full_age": latest_full_age,
+    "latest_full_age_hours": latest_full_age_h,
+    "latest_full_title": title_label(latest_full_age),
+    "latest_full_time": latest_full_time,
+    "backup_running": bool(backup_pid),
+    "verify_running": bool(verify_pid),
+    "missing_credentials": missing_credentials,
+}
+
+print(json.dumps(result, sort_keys=True))
+PY

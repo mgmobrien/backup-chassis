@@ -20,7 +20,7 @@ MONITOR_LABEL="$SYSTEM3_BACKUP_MONITOR_LABEL"
 ENCRYPTION_LABEL="$SYSTEM3_BACKUP_ENCRYPTION_LABEL"
 CREDENTIALS_LABEL="$SYSTEM3_BACKUP_CREDENTIALS_LABEL"
 RUNTIME_ENTRYPOINT="${SYSTEM3_BACKUP_RUNTIME_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-backup}"
-STATUS_COMMAND="${SYSTEM3_BACKUP_STATUS_COMMAND:-$SCRIPT_DIR/system3-backup-status}"
+STATUS_DATA_COMMAND="${SYSTEM3_BACKUP_STATUS_DATA_COMMAND:-$SCRIPT_DIR/system3-backup-status-data}"
 BACKUP_PID_FILE="$SYSTEM3_BACKUP_PID_FILE"
 
 mkdir -p "$DASH_DIR"
@@ -76,7 +76,7 @@ if [[ -f "$VERIFY_STATUS_FILE" ]]; then
     VERIFY_JSON="$(cat "$VERIFY_STATUS_FILE")"
 fi
 
-SUMMARY_JSON="$("$STATUS_COMMAND" --json 2>/dev/null || true)"
+SUMMARY_JSON="$("$STATUS_DATA_COMMAND" 2>/dev/null || true)"
 if [[ -z "$SUMMARY_JSON" ]]; then
     SUMMARY_JSON="{}"
 fi
@@ -235,8 +235,6 @@ current_state = status.get("state", "")
 status_failures = status.get("failures", 0)
 status_next_attempt = fmt_next_attempt(status.get("next_attempt", ""))
 
-verify_state = verify.get("state", "")
-verify_detail = verify.get("detail", "")
 verify_check_dt = parse_time(verify.get("last_check_ok_at", ""))
 verify_restore_dt = parse_time(verify.get("last_restore_ok_at", ""))
 verify_check_age = age_label(verify_check_dt)
@@ -252,13 +250,22 @@ def color_for_health(health):
 
 verify_health = status_summary.get("verify_health", "missing")
 verify_text = status_summary.get("verify_text", "No verification record")
-verify_detail_text = status_summary.get("verify_detail", verify_detail or "Run verification now to create the first recoverability proof.")
+verify_detail_text = status_summary.get("verify_detail", "Run verification now to create the first recoverability proof.")
 verify_color = color_for_health(verify_health)
+verify_check_age = status_summary.get("verify_check_age", verify_check_age)
+verify_restore_age = status_summary.get("verify_restore_age", verify_restore_age)
+verify_check_present = bool(status_summary.get("verify_check_present", bool(verify_check_dt)))
+verify_restore_present = bool(status_summary.get("verify_restore_present", bool(verify_restore_dt)))
 
 status_health = status_summary.get("status_health", "critical")
 status_text = status_summary.get("status_text", "Backup overdue")
 status_detail = status_summary.get("status_detail", f"Last full backup {latest_full_age}")
 status_color = color_for_health(status_health)
+current_state = status_summary.get("current_state", current_state)
+status_failures = status_summary.get("failures", status_failures)
+status_next_attempt = status_summary.get("next_attempt_label", status_next_attempt)
+latest_full_age = status_summary.get("latest_full_age", latest_full_age)
+latest_full_present = bool(status_summary.get("latest_full_present", bool(latest_full)))
 
 paths_html = "<br>\n  ".join(html.escape(item) for item in paths_text.splitlines() if item.strip())
 
@@ -326,16 +333,16 @@ print(f"""<!DOCTYPE html>
   <div class="card">
     <div class="card-label">Last full backup</div>
     <div class="card-value">{html.escape(latest_full['time'] if latest_full else 'None yet')}</div>
-    <div class="card-detail">{html.escape((latest_full_age + ' · snapshot ' + latest_full['id']) if latest_full else 'Waiting for first completed primary snapshot')}</div>
+    <div class="card-detail">{html.escape((latest_full_age + ' · snapshot ' + latest_full['id']) if latest_full_present and latest_full else 'Waiting for first completed primary snapshot')}</div>
   </div>
   <div class="card">
     <div class="card-label">Integrity proof</div>
-    <div class="card-value">{html.escape(verify_check_age if verify_check_dt else ('Failed' if verify_health == 'failed' else ('Running' if verify_health == 'running' else 'None yet')))}</div>
+    <div class="card-value">{html.escape(verify_check_age if verify_check_present else ('Failed' if verify_health == 'failed' else ('Running' if verify_health == 'running' else 'None yet')))}</div>
     <div class="card-detail">restic check {html.escape(check_subset)}</div>
   </div>
   <div class="card">
     <div class="card-label">Restore proof</div>
-    <div class="card-value">{html.escape(verify_restore_age if verify_restore_dt else ('Failed' if verify_health == 'failed' else ('Running' if verify_health == 'running' else 'None yet')))}</div>
+    <div class="card-value">{html.escape(verify_restore_age if verify_restore_present else ('Failed' if verify_health == 'failed' else ('Running' if verify_health == 'running' else 'None yet')))}</div>
     <div class="card-detail">Canary restore drill</div>
   </div>
   <div class="card">

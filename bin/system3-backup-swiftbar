@@ -7,15 +7,12 @@ source "$SCRIPT_DIR/system3-backup-env.sh"
 system3_backup_load_env
 
 STATUS_FILE="$SYSTEM3_BACKUP_STATUS_FILE"
-SNAP_CACHE="$SYSTEM3_BACKUP_SNAPSHOTS_CACHE_FILE"
-VERIFY_STATUS_FILE="$SYSTEM3_BACKUP_STATUS_DIR/verification-status.json"
 DISPLAY_NAME="$SYSTEM3_BACKUP_DISPLAY_NAME"
-SNAPSHOT_MATCH_PATH="${SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH:-}"
 BACKUP_COMMAND="${SYSTEM3_BACKUP_RUNTIME_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-backup}"
 VERIFY_COMMAND="${SYSTEM3_BACKUP_VERIFY_SCRIPT:-$SCRIPT_DIR/system3-backup-verify}"
 DASHBOARD_COMMAND="${SYSTEM3_BACKUP_DASHBOARD_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-dashboard}"
 DASHBOARD_OUTPUT="${SYSTEM3_BACKUP_DASHBOARD_OUTPUT:-$SYSTEM3_BACKUP_DASHBOARD_DIR/index.html}"
-STATUS_COMMAND="${SYSTEM3_BACKUP_STATUS_COMMAND:-$SCRIPT_DIR/system3-backup-status}"
+STATUS_DATA_COMMAND="${SYSTEM3_BACKUP_STATUS_DATA_COMMAND:-$SCRIPT_DIR/system3-backup-status-data}"
 SCHEDULER_SERVICE="${SYSTEM3_BACKUP_SCHEDULER_SERVICE:-}"
 SCHEDULER_PLIST="${SYSTEM3_BACKUP_SCHEDULER_PLIST:-}"
 HC_DETAILS_URL="${SYSTEM3_BACKUP_HEALTHCHECKS_CHECK_URL:-${HEALTHCHECKS_DETAILS_URL:-}}"
@@ -23,25 +20,6 @@ STORAGE_URL="${SYSTEM3_BACKUP_STORAGE_URL:-}"
 BACKUP_PROCESS_MATCH="${SYSTEM3_BACKUP_BACKUP_PROCESS_MATCH:-restic backup}"
 BACKUP_PID_FILE="$SYSTEM3_BACKUP_PID_FILE"
 VERIFY_PID_FILE="$SYSTEM3_BACKUP_VERIFY_PID_FILE"
-
-if [[ -z "$SNAPSHOT_MATCH_PATH" && -f "$SYSTEM3_BACKUP_PATHS_FILE" ]]; then
-    SNAPSHOT_MATCH_PATH="$(
-        python3 - "$SYSTEM3_BACKUP_PATHS_FILE" <<'PY'
-import sys
-
-path_file = sys.argv[1]
-try:
-    with open(path_file) as f:
-        for raw in f:
-            line = raw.strip()
-            if line and not line.startswith("#"):
-                print(line)
-                break
-except FileNotFoundError:
-    pass
-PY
-    )"
-fi
 
 pid_from_file() {
     local pid_file="$1"
@@ -93,7 +71,7 @@ PY
     )"
 fi
 
-SUMMARY_JSON="$("$STATUS_COMMAND" --json 2>/dev/null || true)"
+SUMMARY_JSON="$("$STATUS_DATA_COMMAND" 2>/dev/null || true)"
 if [[ -z "$SUMMARY_JSON" ]]; then
     SUMMARY_JSON="{}"
 fi
@@ -107,9 +85,6 @@ try:
 except Exception:
     data = {}
 
-latest_age = data.get("latest_full_age", "")
-latest_title = latest_age[:-4] if latest_age.endswith(" ago") else latest_age
-
 for key in (
     "status_health",
     "status_text",
@@ -117,11 +92,21 @@ for key in (
     "verify_health",
     "verify_text",
     "verify_detail",
+    "verify_check_age",
+    "verify_restore_age",
     "latest_full_age",
     "latest_full_snapshot",
+    "latest_full_present",
+    "latest_full_age_hours",
+    "latest_full_title",
 ):
-    print(data.get(key, ""))
-print(latest_title)
+    value = data.get(key, "")
+    if isinstance(value, bool):
+        print("yes" if value else "no")
+    elif value is None:
+        print("")
+    else:
+        print(value)
 PY
 )"
 SUMMARY_STATUS_HEALTH="$(echo "$SUMMARY_INFO" | sed -n '1p')"
@@ -130,9 +115,13 @@ SUMMARY_STATUS_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '3p')"
 SUMMARY_VERIFY_HEALTH="$(echo "$SUMMARY_INFO" | sed -n '4p')"
 SUMMARY_VERIFY_TEXT="$(echo "$SUMMARY_INFO" | sed -n '5p')"
 SUMMARY_VERIFY_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '6p')"
-SUMMARY_LATEST_FULL_AGE="$(echo "$SUMMARY_INFO" | sed -n '7p')"
-SUMMARY_LATEST_FULL_SNAPSHOT="$(echo "$SUMMARY_INFO" | sed -n '8p')"
-SUMMARY_LATEST_FULL_TITLE="$(echo "$SUMMARY_INFO" | sed -n '9p')"
+SUMMARY_VERIFY_CHECK_AGE="$(echo "$SUMMARY_INFO" | sed -n '7p')"
+SUMMARY_VERIFY_RESTORE_AGE="$(echo "$SUMMARY_INFO" | sed -n '8p')"
+SUMMARY_LATEST_FULL_AGE="$(echo "$SUMMARY_INFO" | sed -n '9p')"
+SUMMARY_LATEST_FULL_SNAPSHOT="$(echo "$SUMMARY_INFO" | sed -n '10p')"
+SUMMARY_LATEST_FULL_PRESENT="$(echo "$SUMMARY_INFO" | sed -n '11p')"
+SUMMARY_LATEST_FULL_HOURS="$(echo "$SUMMARY_INFO" | sed -n '12p')"
+SUMMARY_LATEST_FULL_TITLE="$(echo "$SUMMARY_INFO" | sed -n '13p')"
 
 RESTIC_PID=""
 RESTIC_PID="$(pid_from_file "$BACKUP_PID_FILE" || true)"
@@ -152,59 +141,6 @@ if [[ -n "$VERIFY_PID" ]]; then
     VERIFY_RUNNING="yes"
 fi
 
-ALL_SNAPS=""
-STALE_SNAPS=""
-if [[ -f "$SNAP_CACHE" ]]; then
-    STALE_SNAPS="$(cat "$SNAP_CACHE")"
-    CACHE_AGE=$(( $(date +%s) - $(stat -f %m "$SNAP_CACHE") ))
-    if [[ "$CACHE_AGE" -lt 21600 ]]; then
-        ALL_SNAPS="$STALE_SNAPS"
-    fi
-fi
-
-if [[ -z "$ALL_SNAPS" ]]; then
-    LIVE_SNAPS="$(restic snapshots --json 2>/dev/null || true)"
-    if [[ -n "$LIVE_SNAPS" && "$LIVE_SNAPS" != "[]" ]]; then
-        ALL_SNAPS="$LIVE_SNAPS"
-    elif [[ -n "$STALE_SNAPS" ]]; then
-        ALL_SNAPS="$STALE_SNAPS"
-    fi
-
-    if [[ -n "$ALL_SNAPS" && "$ALL_SNAPS" != "[]" ]]; then
-        echo "$ALL_SNAPS" > "$SNAP_CACHE"
-    fi
-fi
-
-HAS_FULL="no"
-if [[ -n "$ALL_SNAPS" && "$ALL_SNAPS" != "[]" ]]; then
-    HAS_FULL="$(
-        ALL_SNAPS_JSON="$ALL_SNAPS" \
-        SNAPSHOT_MATCH_PATH="$SNAPSHOT_MATCH_PATH" \
-        python3 - <<'PY'
-import json
-import os
-
-match_path = (os.environ.get("SNAPSHOT_MATCH_PATH") or "").rstrip("/")
-raw_json = os.environ.get("ALL_SNAPS_JSON", "")
-
-try:
-    data = json.loads(raw_json)
-except Exception:
-    print("no")
-    raise SystemExit
-
-def snapshot_matches(snapshot):
-    paths = [p.rstrip("/") for p in snapshot.get("paths", [])]
-    if not match_path:
-        return bool(paths)
-    return match_path in paths
-
-print("yes" if any(snapshot_matches(snapshot) for snapshot in data) else "no")
-PY
-    )"
-    HAS_FULL="${HAS_FULL:-no}"
-fi
-
 LAUNCHD_LOADED=1
 if [[ -n "$SCHEDULER_SERVICE" ]]; then
     if launchctl list 2>/dev/null | grep -Fq "$SCHEDULER_SERVICE"; then
@@ -214,131 +150,8 @@ if [[ -n "$SCHEDULER_SERVICE" ]]; then
     fi
 fi
 
-LAST_FULL_HOURS=999
-LAST_FULL_AGE="never"
-LAST_FULL_TITLE="none"
-LAST_FULL_SNAPSHOT="none"
-if [[ "$HAS_FULL" == "yes" ]]; then
-    LAST_FULL_INFO="$(
-        ALL_SNAPS_JSON="$ALL_SNAPS" \
-        SNAPSHOT_MATCH_PATH="$SNAPSHOT_MATCH_PATH" \
-        python3 - <<'PY'
-import json
-import os
-from datetime import datetime, timezone
-
-match_path = (os.environ.get("SNAPSHOT_MATCH_PATH") or "").rstrip("/")
-raw_json = os.environ.get("ALL_SNAPS_JSON", "")
-
-try:
-    data = json.loads(raw_json)
-except Exception:
-    raise SystemExit
-
-def parse_time(value):
-    if not value:
-        return None
-    raw = value.replace("Z", "+00:00")
-    try:
-        return datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-
-def snapshot_matches(snapshot):
-    paths = [p.rstrip("/") for p in snapshot.get("paths", [])]
-    if not match_path:
-        return bool(paths)
-    return match_path in paths
-
-def age_parts(dt):
-    if dt is None:
-        return (999, "never", "none")
-    if dt.tzinfo is not None:
-        now = datetime.now(timezone.utc)
-        diff = now - dt.astimezone(timezone.utc)
-    else:
-        now = datetime.now()
-        diff = now - dt
-    hours = max(0, int(diff.total_seconds() / 3600))
-    if hours < 1:
-        age = f"{max(1, int(diff.total_seconds() / 60))}m ago"
-        title = "now"
-    elif hours < 24:
-        age = f"{hours}h ago"
-        title = f"{hours}h"
-    else:
-        days = max(1, int(hours / 24))
-        age = f"{days}d ago"
-        title = f"{days}d"
-    return (hours, age, title)
-
-candidates = [snapshot for snapshot in data if snapshot_matches(snapshot)]
-candidates.sort(key=lambda snapshot: snapshot.get("time", ""), reverse=True)
-if not candidates:
-    raise SystemExit
-
-latest = candidates[0]
-hours, age, title = age_parts(parse_time(latest.get("time", "")))
-print(hours)
-print(age)
-print(title)
-print(latest.get("short_id", "none"))
-PY
-    )"
-    LAST_FULL_HOURS="$(echo "$LAST_FULL_INFO" | sed -n '1p')"
-    LAST_FULL_AGE="$(echo "$LAST_FULL_INFO" | sed -n '2p')"
-    LAST_FULL_TITLE="$(echo "$LAST_FULL_INFO" | sed -n '3p')"
-    LAST_FULL_SNAPSHOT="$(echo "$LAST_FULL_INFO" | sed -n '4p')"
-fi
-
-VERIFY_CHECK_AGE="never"
-VERIFY_RESTORE_AGE="never"
-VERIFY_SUMMARY="$SUMMARY_VERIFY_TEXT"
-VERIFY_DETAIL="$SUMMARY_VERIFY_DETAIL"
-if [[ -f "$VERIFY_STATUS_FILE" ]]; then
-    VERIFY_INFO="$(
-        python3 - "$VERIFY_STATUS_FILE" <<'PY'
-import json
-import sys
-from datetime import datetime, timezone
-
-path = sys.argv[1]
-with open(path) as f:
-    data = json.load(f)
-
-now = datetime.now(timezone.utc)
-
-def parse_time(value):
-    if not value:
-        return None
-    raw = value.replace("Z", "+00:00")
-    try:
-        return datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-
-def age_label(dt):
-    if not dt:
-        return "never"
-    diff = now - dt.astimezone(timezone.utc)
-    total_seconds = max(0, int(diff.total_seconds()))
-    if total_seconds < 3600:
-        return f"{max(1, total_seconds // 60)}m ago"
-    if total_seconds < 86400:
-        return f"{total_seconds // 3600}h ago"
-    return f"{max(1, total_seconds // 86400)}d ago"
-
-check_dt = parse_time(data.get("last_check_ok_at", ""))
-restore_dt = parse_time(data.get("last_restore_ok_at", ""))
-check_age = age_label(check_dt)
-restore_age = age_label(restore_dt)
-print(check_age)
-print(restore_age)
-PY
-    )"
-    VERIFY_CHECK_AGE="$(echo "$VERIFY_INFO" | sed -n '1p')"
-    VERIFY_RESTORE_AGE="$(echo "$VERIFY_INFO" | sed -n '2p')"
-fi
+VERIFY_CHECK_AGE="${SUMMARY_VERIFY_CHECK_AGE:-never}"
+VERIFY_RESTORE_AGE="${SUMMARY_VERIFY_RESTORE_AGE:-never}"
 
 title_gb_from_status() {
     python3 - "$STATUS_FILE" <<'PY'
@@ -430,13 +243,13 @@ PY
 
     if [[ -n "$STATUS_DATA" ]]; then
         if [[ "$UPLOAD_STATE" == "paused" ]]; then
-            if [[ "$HAS_FULL" == "no" ]]; then
+            if [[ "$SUMMARY_LATEST_FULL_PRESENT" != "yes" ]]; then
                 echo "First backup paused | color=#FF9500 size=14"
             else
                 echo "Backup paused | color=#FF9500 size=14"
             fi
         else
-            if [[ "$HAS_FULL" == "no" ]]; then
+            if [[ "$SUMMARY_LATEST_FULL_PRESENT" != "yes" ]]; then
                 echo "First backup running | color=#007AFF size=14"
             else
                 echo "Backup running | color=#007AFF size=14"
@@ -489,8 +302,8 @@ print(f"{failures} consecutive failure(s)")
 PY
     )"
     echo "Snapshot completed, cleanup warning | color=#FF9500 size=14"
-    if [[ "$HAS_FULL" == "yes" ]]; then
-        echo "  Last full backup: ${LAST_FULL_AGE} | size=13"
+    if [[ "$SUMMARY_LATEST_FULL_PRESENT" == "yes" ]]; then
+        echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
     echo "  Retention cleanup failed after snapshot creation | size=13"
     echo "  $(echo "$DETAIL" | sed -n '1p') | size=13 color=#888"
@@ -529,8 +342,8 @@ print(f"{failures} consecutive failure(s)")
 PY
     )"
     echo "Waiting for network | color=#FF9500 size=14"
-    if [[ "$HAS_FULL" == "yes" ]]; then
-        echo "  Last full backup: ${LAST_FULL_AGE} | size=13"
+    if [[ "$SUMMARY_LATEST_FULL_PRESENT" == "yes" ]]; then
+        echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
     echo "  $(echo "$DETAIL" | sed -n '1p') | size=13"
     echo "  $(echo "$DETAIL" | sed -n '2p') | size=13 color=#888"
@@ -565,8 +378,8 @@ print(f"{failures} consecutive failure(s)")
 PY
     )"
     echo "Backup failed, will retry | color=#FF9500 size=14"
-    if [[ "$HAS_FULL" == "yes" ]]; then
-        echo "  Last full backup: ${LAST_FULL_AGE} | size=13"
+    if [[ "$SUMMARY_LATEST_FULL_PRESENT" == "yes" ]]; then
+        echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
     echo "  $(echo "$DETAIL" | sed -n '1p') | size=13"
     echo "  $(echo "$DETAIL" | sed -n '2p') | size=13 color=#888"
