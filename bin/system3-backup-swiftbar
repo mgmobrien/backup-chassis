@@ -203,7 +203,7 @@ elif [[ "$UPLOAD_STATE" == "paused" ]]; then
     echo "paused | sfimage=pause.circle.fill sfcolor=FF9500"
 elif [[ "$UPLOAD_STATE" == "running" ]]; then
     echo "running | sfimage=arrow.triangle.2.circlepath sfcolor=007AFF"
-elif [[ "$SUMMARY_STATUS_HEALTH" == "running" && "$SUMMARY_STATUS_TEXT" == "Verification running" ]]; then
+elif [[ "$SUMMARY_STATUS_CODE" == "verification_running" ]]; then
     echo "verify | sfimage=checkmark.shield.fill sfcolor=007AFF"
 elif [[ "$LAUNCHD_LOADED" -eq 0 ]]; then
     echo "pause | sfimage=pause.circle.fill sfcolor=FF9500"
@@ -292,8 +292,8 @@ PY
     fi
 elif [[ "$UPLOAD_STATE" != "none" ]]; then
     echo "Backup starting... | color=#007AFF size=14"
-elif [[ "$SUMMARY_STATUS_HEALTH" == "running" && "$SUMMARY_STATUS_TEXT" == "Verification running" ]]; then
-    echo "Verification running | color=#007AFF size=14"
+elif [[ "$SUMMARY_STATUS_CODE" == "verification_running" ]]; then
+    echo "Recovery proof running | color=#007AFF size=14"
     if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
         echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
@@ -441,7 +441,7 @@ elif [[ "$SUMMARY_STATUS_CODE" == "backup_overdue" ]]; then
     echo "  No active failure is recorded, but backup age is past the quiet window. | size=13 color=#666"
 else
     if [[ "$SUMMARY_STATUS_CODE" == "verification_failed" ]]; then
-        echo "${DISPLAY_NAME} status: verification failed | color=${CRITICAL_TEXT_COLOR} size=14"
+        echo "${DISPLAY_NAME} status: recovery proof failed | color=${CRITICAL_TEXT_COLOR} size=14"
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
             echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
         fi
@@ -457,7 +457,7 @@ else
         echo "  Restore drill: ${VERIFY_RESTORE_AGE}${VERIFY_RESTORE_LINE_SUFFIX} | size=13"
         echo "  Snapshot ${SUMMARY_LATEST_FULL_SNAPSHOT} | font=Menlo size=12 color=#888"
     elif [[ "$SUMMARY_STATUS_CODE" == "backup_proof_stale" ]]; then
-        echo "${DISPLAY_NAME} status: backup healthy, proof stale | color=${WARNING_TEXT_COLOR} size=14"
+        echo "${DISPLAY_NAME} status: backup healthy, recovery proof stale | color=${WARNING_TEXT_COLOR} size=14"
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
             echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
         fi
@@ -511,7 +511,7 @@ else
         PRIMARY_ACTION_COLOR=" color=#34C759"
     elif [[ "$SUMMARY_STATUS_CODE" == "backup_proof_stale" || "$SUMMARY_STATUS_CODE" == "backup_delayed_proof_stale" || "$SUMMARY_STATUS_CODE" == "verification_failed" ]]; then
         PRIMARY_ACTION_KIND="verify"
-        PRIMARY_ACTION_LABEL="Fix now: Run verification now"
+        PRIMARY_ACTION_LABEL="Fix now: Run proof now"
         PRIMARY_ACTION_COMMAND="$VERIFY_COMMAND"
         PRIMARY_ACTION_PARAM1="--force"
         PRIMARY_ACTION_COLOR=" color=#34C759"
@@ -539,7 +539,7 @@ if [[ "$UPLOAD_STATE" == "none" ]]; then
         echo "Run backup now | bash=$BACKUP_COMMAND terminal=true refresh=true"
     fi
     if [[ "${PRIMARY_ACTION_KIND:-backup}" != "verify" ]]; then
-        echo "Run verification now | bash=$VERIFY_COMMAND param1=--force terminal=true refresh=true"
+        echo "Run proof now | bash=$VERIFY_COMMAND param1=--force terminal=true refresh=true"
     fi
     echo "---"
 fi
@@ -564,7 +564,9 @@ if [[ -n "$SUMMARY_NEXT_RUN_LABEL" && "$UPLOAD_STATE" == "none" ]]; then
 elif [[ -n "$SUMMARY_NEXT_RUN_DETAIL" && "$UPLOAD_STATE" == "none" ]]; then
     echo "Next automatic run: ${SUMMARY_NEXT_RUN_DETAIL} | size=13 color=#888"
 fi
-echo "Verification: ${SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS}d integrity + ${SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS}d restore canary | size=13 color=#888"
+echo "Recovery proof: ${SYSTEM3_BACKUP_CHECK_INTERVAL_DAYS}d integrity check + ${SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS}d test restore | size=13 color=#888"
+echo "  Integrity check reads backup data for corruption. | size=12 color=#888"
+echo "  Restore drill restores a canary file to prove recovery. | size=12 color=#888"
 echo "Encryption: ${SYSTEM3_BACKUP_ENCRYPTION_LABEL} | size=13 color=#888"
 
 echo "---"

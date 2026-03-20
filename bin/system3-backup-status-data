@@ -297,16 +297,16 @@ verify_restore_due_label = next_run_label(verify_next_restore_dt) if verify_next
 verify_check_due_detail = next_run_detail(verify_next_check_dt) if verify_next_check_dt else ""
 verify_restore_due_detail = next_run_detail(verify_next_restore_dt) if verify_next_restore_dt else ""
 verify_health = "missing"
-verify_text = "No verification record"
+verify_text = "No recovery proof record"
 verify_detail_text = verify_detail or "Run verification now to create the first recoverability proof."
 
 if verify_state == "failed":
     verify_health = "failed"
-    verify_text = "Verification failed"
+    verify_text = "Recovery proof failed"
     verify_detail_text = verify_detail or "The last integrity check or restore drill failed."
 elif verify_pid or verify_state == "running":
     verify_health = "running"
-    verify_text = "Verification running"
+    verify_text = "Recovery proof running"
     verify_detail_text = verify_detail or "Recoverability proof is in progress."
 elif verify_check_dt and verify_restore_dt:
     check_age_days = (now - verify_check_dt).total_seconds() / 86400
@@ -322,11 +322,11 @@ elif verify_check_dt and verify_restore_dt:
             overdue.append("integrity check overdue")
         if restore_age_days > 40:
             overdue.append("restore drill overdue")
-        verify_text = "Verification stale"
+        verify_text = "Recovery proof stale"
         verify_detail_text = " · ".join(overdue) if overdue else "Recoverability proof is stale."
 elif verify_check_dt or verify_restore_dt:
     verify_health = "stale"
-    verify_text = "Verification incomplete"
+    verify_text = "Recovery proof incomplete"
     verify_detail_text = "Waiting for the first full integrity check and restore drill pair."
 
 current_state = status.get("state", "")
@@ -354,7 +354,7 @@ elif is_uploading:
 elif verify_health == "running":
     status_code = "verification_running"
     status_health = "running"
-    status_text = "Verification running"
+    status_text = "Recovery proof running"
     status_detail = verify_detail_text
 elif current_state == "maintenance_warning":
     status_code = "maintenance_warning"
@@ -381,7 +381,7 @@ elif not latest_full:
 elif verify_health == "failed":
     status_code = "verification_failed"
     status_health = "critical"
-    status_text = "Verification failed"
+    status_text = "Recovery proof failed"
     status_detail = verify_detail_text
 elif latest_full_age_s is not None and latest_full_age_s < warn_after_s and verify_health == "ok":
     status_code = "healthy"
@@ -391,7 +391,7 @@ elif latest_full_age_s is not None and latest_full_age_s < warn_after_s and veri
 elif latest_full_age_s is not None and latest_full_age_s < warn_after_s:
     status_code = "backup_proof_stale"
     status_health = "warning"
-    status_text = "Backup healthy, proof stale"
+    status_text = "Backup healthy, recovery proof stale"
     status_detail = backup_timing_detail
 elif latest_full_age_s is not None and latest_full_age_s < critical_after_s and verify_health == "ok":
     status_code = "backup_delayed"
@@ -401,7 +401,7 @@ elif latest_full_age_s is not None and latest_full_age_s < critical_after_s and 
 elif latest_full_age_s is not None and latest_full_age_s < critical_after_s:
     status_code = "backup_delayed_proof_stale"
     status_health = "warning"
-    status_text = "Backup delayed, proof stale"
+    status_text = "Backup delayed, recovery proof stale"
     status_detail = backup_timing_detail
 else:
     status_code = "backup_overdue"

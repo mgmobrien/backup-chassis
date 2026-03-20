@@ -63,7 +63,7 @@ if next_run_compact:
     print(f"Next automatic run: {next_run_compact}")
 elif next_run:
     print(f"Next automatic run: {next_run}")
-print(f"Verification: {data.get('verify_text', 'No verification record')}")
+print(f"Recovery proof: {data.get('verify_text', 'No recovery proof record')}")
 check_age = data.get("verify_check_age", "")
 restore_age = data.get("verify_restore_age", "")
 check_due = data.get("verify_check_due_label", "")

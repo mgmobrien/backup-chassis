@@ -185,7 +185,7 @@ echo "render cli status"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup" status > "$TMP_ROOT/status.txt"
 assert_contains "Backup smoke: Healthy" "$TMP_ROOT/status.txt"
 assert_contains "Snapshot $SMOKE_SNAPSHOT_ID" "$TMP_ROOT/status.txt"
-assert_contains "Verification: Recoverability verified" "$TMP_ROOT/status.txt"
+assert_contains "Recovery proof: Recoverability verified" "$TMP_ROOT/status.txt"
 
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup" status --json > "$TMP_ROOT/status.json"
 python3 - "$TMP_ROOT/status.json" "$SMOKE_SNAPSHOT_ID" <<'PY'

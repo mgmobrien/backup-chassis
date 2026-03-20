@@ -249,7 +249,7 @@ def color_for_health(health):
     return "#FF3B30"
 
 verify_health = status_summary.get("verify_health", "missing")
-verify_text = status_summary.get("verify_text", "No verification record")
+verify_text = status_summary.get("verify_text", "No recovery proof record")
 verify_detail_text = status_summary.get("verify_detail", "Run verification now to create the first recoverability proof.")
 verify_color = color_for_health(verify_health)
 verify_check_age = status_summary.get("verify_check_age", verify_check_age)
@@ -342,14 +342,14 @@ print(f"""<!DOCTYPE html>
     <div class="card-detail">{html.escape((latest_full_age + ' · snapshot ' + latest_full['id']) if latest_full_present and latest_full else 'Waiting for first completed primary snapshot')}</div>
   </div>
   <div class="card">
-    <div class="card-label">Integrity proof</div>
+    <div class="card-label">Integrity check</div>
     <div class="card-value">{html.escape(verify_check_age if verify_check_present else ('Failed' if verify_health == 'failed' else ('Running' if verify_health == 'running' else 'None yet')))}</div>
-    <div class="card-detail">restic check {html.escape(check_subset)} · next {html.escape(verify_check_due_label)}</div>
+    <div class="card-detail">Reads backup data for corruption · next {html.escape(verify_check_due_label)}</div>
   </div>
   <div class="card">
-    <div class="card-label">Restore proof</div>
+    <div class="card-label">Restore drill</div>
     <div class="card-value">{html.escape(verify_restore_age if verify_restore_present else ('Failed' if verify_health == 'failed' else ('Running' if verify_health == 'running' else 'None yet')))}</div>
-    <div class="card-detail">Canary restore drill · next {html.escape(verify_restore_due_label)}</div>
+    <div class="card-detail">Test restore of a canary file · next {html.escape(verify_restore_due_label)}</div>
   </div>
   <div class="card">
     <div class="card-label">Repository</div>
@@ -359,8 +359,15 @@ print(f"""<!DOCTYPE html>
   <div class="card">
     <div class="card-label">Schedule</div>
     <div class="card-value">{html.escape(schedule_label)}</div>
-    <div class="card-detail">Next automatic run {html.escape(next_run_label)} · {html.escape(check_interval_days)}d integrity · {html.escape(restore_interval_days)}d restore</div>
+    <div class="card-detail">Next automatic run {html.escape(next_run_label)} · {html.escape(check_interval_days)}d integrity check · {html.escape(restore_interval_days)}d test restore</div>
   </div>
+</div>
+""")
+
+print(f"""
+<div class="card" style="margin-bottom: 24px;">
+  <div class="card-label">How recovery proof works</div>
+  <div class="card-detail" style="color: #ccc; font-size: 13px;">Backup only shows green when two proof signals are fresh: an integrity check that reads backup data for corruption, and a restore drill that restores a canary file to prove recovery works.</div>
 </div>
 """)
 
@@ -442,12 +449,12 @@ print(f"""
   <div class="config-row"><span class="config-label">Engine</span><span>restic</span></div>
   <div class="config-row"><span class="config-label">Storage</span><span>{html.escape(storage_label)}</span></div>
   <div class="config-row"><span class="config-label">Scheduler</span><span>{html.escape(scheduler_label)}</span></div>
-  <div class="config-row"><span class="config-label">Verification</span><span>{html.escape(check_interval_days)}d `restic check` + {html.escape(restore_interval_days)}d canary restore</span></div>
+  <div class="config-row"><span class="config-label">Recovery proof</span><span>{html.escape(check_interval_days)}d integrity check + {html.escape(restore_interval_days)}d test restore</span></div>
   <div class="config-row"><span class="config-label">Monitor</span><span>{html.escape(monitor_label)}</span></div>
   <div class="config-row"><span class="config-label">Healthchecks</span><span>{('<a href="' + html.escape(hc_details_url) + '" style="color: #8ab4f8;">check details</a>') if hc_details_url else 'not configured'}</span></div>
   <div class="config-row"><span class="config-label">Runtime entrypoint</span><span class="mono">{html.escape(runtime_entrypoint)}</span></div>
   <div class="config-row"><span class="config-label">Status file</span><span class="mono">{html.escape(status_file)}</span></div>
-  <div class="config-row"><span class="config-label">Verification file</span><span class="mono">{html.escape(verify_status_file)}</span></div>
+  <div class="config-row"><span class="config-label">Proof state file</span><span class="mono">{html.escape(verify_status_file)}</span></div>
   <div class="config-row"><span class="config-label">Logs</span><span class="mono">{html.escape(log_dir)}</span></div>
   <div class="config-row"><span class="config-label">Exclusions</span><span class="mono">{html.escape(excludes_file)}</span></div>
   <div class="config-row"><span class="config-label">Encryption</span><span>{html.escape(encryption_label)}</span></div>
