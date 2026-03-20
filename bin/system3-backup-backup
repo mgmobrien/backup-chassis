@@ -14,6 +14,7 @@ STATUS_FILE="$SYSTEM3_BACKUP_STATUS_FILE"
 SNAPSHOTS_CACHE_FILE="$SYSTEM3_BACKUP_SNAPSHOTS_CACHE_FILE"
 FAIL_COUNT_FILE="$SYSTEM3_BACKUP_FAIL_COUNT_FILE"
 PIDFILE="${TMPDIR:-/tmp}/system3-backup.pid"
+PIDFILE="$SYSTEM3_BACKUP_PID_FILE"
 VERIFY_SCRIPT="${SYSTEM3_BACKUP_VERIFY_SCRIPT:-$SCRIPT_DIR/system3-backup-verify}"
 
 declare -a BACKUP_PATHS=()
@@ -255,6 +256,7 @@ print_config_check() {
     printf 'excludes_file=%s\n' "$SYSTEM3_BACKUP_EXCLUDES_FILE"
     printf 'status_file=%s\n' "$STATUS_FILE"
     printf 'snapshots_cache_file=%s\n' "$SNAPSHOTS_CACHE_FILE"
+    printf 'pid_file=%s\n' "$PIDFILE"
     printf 'canary_file=%s\n' "$SYSTEM3_BACKUP_CANARY_FILE"
     printf 'run_wrapper_script=%s\n' "${SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT:-}"
     printf 'failure_notify_script=%s\n' "${SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT:-}"

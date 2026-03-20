@@ -25,7 +25,7 @@ That means:
 - an operator-chosen `restic` backend, with S3-compatible object storage such as Backblaze B2 as the currently documented example
 - a platform scheduler (`launchd` on macOS, `systemd --user` on Linux)
 - healthchecks-style heartbeat monitoring
-- a local status surface for operator confidence
+- local status surfaces for operator confidence
 - periodic integrity and restore-proof verification
 
 The current public examples assume S3-compatible object storage or Backblaze
@@ -65,6 +65,10 @@ config on macOS.
 The repo now also contains a first Linux adapter path for `systemd --user`
 scheduling plus the dashboard surface, but that Linux lane is not yet dogfooded
 by Matt.
+
+The shared cross-platform operator surface is:
+
+- `bin/system3-backup-status` for concise text or `--json` machine-readable status
 
 Those local operator surfaces still exist on Matt's machine under:
 
@@ -138,6 +142,7 @@ The extracted runtime now includes:
 - `bin/system3-backup-linux-smoke-test`
 - `bin/system3-backup-notify-linux`
 - `bin/system3-backup-notify-macos`
+- `bin/system3-backup-status`
 - `bin/system3-backup-smoke-test`
 - `bin/system3-backup-swiftbar`
 - `bin/system3-backup-verify`
@@ -188,7 +193,8 @@ prerequisites.
 
 `system3-backup-ci-check` runs shell syntax validation plus the repo smoke
 test, which bootstraps a temp install surface and verifies that the generated
-env, launchd plist, dashboard, and SwiftBar output cohere end to end.
+env, launchd plist, status surface, dashboard, and SwiftBar output cohere end
+to end.
 
 ## License
 

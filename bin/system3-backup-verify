@@ -10,6 +10,7 @@ system3_backup_require_runtime_credentials
 LOGFILE="$SYSTEM3_BACKUP_LOG_DIR/verify-$(date +%Y-%m-%d_%H%M%S).log"
 STATUS_FILE="$SYSTEM3_BACKUP_STATUS_DIR/verification-status.json"
 PIDFILE="${TMPDIR:-/tmp}/system3-backup-verify.pid"
+PIDFILE="$SYSTEM3_BACKUP_VERIFY_PID_FILE"
 MODE="${1:---if-due}"
 
 cleanup() {

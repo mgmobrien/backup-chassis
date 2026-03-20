@@ -122,6 +122,22 @@ Then open:
 ~/.local/share/system3-backup/index.html
 ```
 
+## CLI status
+
+For a lightweight operator-facing status readout:
+
+```bash
+SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
+  bin/system3-backup-status
+```
+
+For machine-readable status:
+
+```bash
+SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
+  bin/system3-backup-status --json
+```
+
 ## Scope
 
 This is real Linux support for the scheduler + dashboard lane, but it is still

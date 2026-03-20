@@ -206,6 +206,26 @@ bin/system3-backup-dashboard
 Set `SYSTEM3_BACKUP_DASHBOARD_OUTPUT` if you want the generated HTML written to
 a specific local path.
 
+The cross-platform CLI status surface lives at:
+
+```bash
+bin/system3-backup-status
+```
+
+Point it at your local env file if needed:
+
+```bash
+SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
+bin/system3-backup-status
+```
+
+For machine-readable output:
+
+```bash
+SYSTEM3_BACKUP_ENV_FILE="$HOME/.config/system3-backup/system3-backup.env" \
+bin/system3-backup-status --json
+```
+
 For now, this repo provides:
 
 - the public architecture and boundary docs

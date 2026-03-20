@@ -156,6 +156,28 @@ assert_contains "Backup smoke" "$DASHBOARD_DIR/index.html"
 assert_contains "$SMOKE_SNAPSHOT_ID" "$DASHBOARD_DIR/index.html"
 assert_contains "Healthy" "$DASHBOARD_DIR/index.html"
 
+echo "render cli status"
+SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-status" > "$TMP_ROOT/status.txt"
+assert_contains "Backup smoke: Healthy" "$TMP_ROOT/status.txt"
+assert_contains "Snapshot $SMOKE_SNAPSHOT_ID" "$TMP_ROOT/status.txt"
+assert_contains "Verification: Recoverability verified" "$TMP_ROOT/status.txt"
+
+SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-status" --json > "$TMP_ROOT/status.json"
+python3 - "$TMP_ROOT/status.json" "$SMOKE_SNAPSHOT_ID" <<'PY'
+import json
+import sys
+
+status_path, snapshot_id = sys.argv[1:3]
+with open(status_path) as handle:
+    data = json.load(handle)
+
+assert data["display_name"] == "Backup smoke", data
+assert data["status_health"] == "ok", data
+assert data["status_text"] == "Healthy", data
+assert data["verify_health"] == "ok", data
+assert data["latest_full_snapshot"] == snapshot_id, data
+PY
+
 echo "assert unit contents"
 assert_contains "ExecStart=$REPO_ROOT/bin/system3-backup-backup" "$SYSTEMD_SERVICE_PATH"
 assert_contains "OnUnitActiveSec=14400s" "$SYSTEMD_TIMER_PATH"
