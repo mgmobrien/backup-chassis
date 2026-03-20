@@ -506,7 +506,7 @@ else
         PRIMARY_ACTION_COLOR=" color=#34C759"
     elif [[ "$SUMMARY_STATUS_CODE" == "backup_proof_stale" || "$SUMMARY_STATUS_CODE" == "backup_delayed_proof_stale" || "$SUMMARY_STATUS_CODE" == "verification_failed" ]]; then
         PRIMARY_ACTION_KIND="verify"
-        PRIMARY_ACTION_LABEL="Fix now: Run proof now"
+        PRIMARY_ACTION_LABEL="Fix now: Run integrity check + restore drill"
         PRIMARY_ACTION_COMMAND="$VERIFY_COMMAND"
         PRIMARY_ACTION_PARAM1="--force"
         PRIMARY_ACTION_COLOR=" color=#34C759"
@@ -534,7 +534,7 @@ if [[ "$UPLOAD_STATE" == "none" ]]; then
         echo "Run backup now | bash=$BACKUP_COMMAND terminal=true refresh=true"
     fi
     if [[ "${PRIMARY_ACTION_KIND:-backup}" != "verify" ]]; then
-        echo "Run proof now | bash=$VERIFY_COMMAND param1=--force terminal=true refresh=true"
+        echo "Run integrity check + restore drill | bash=$VERIFY_COMMAND param1=--force terminal=true refresh=true"
     fi
     echo "---"
 fi

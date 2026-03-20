@@ -14,7 +14,7 @@ Commands:
   doctor [args]                    Run dependency and adapter checks
   install [--platform macos|linux] Bootstrap a local install surface
   backup [args]                    Run a backup
-  verify [args]                    Run integrity / restore-proof verification
+  verify [args]                    Run an integrity check + restore drill
   status [--json]                  Show operator-facing backup status
   dashboard [args]                 Render the local HTML dashboard
   smoke-test [--platform ...]      Run the platform smoke test

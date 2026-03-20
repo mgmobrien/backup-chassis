@@ -298,7 +298,7 @@ verify_check_due_detail = next_run_detail(verify_next_check_dt) if verify_next_c
 verify_restore_due_detail = next_run_detail(verify_next_restore_dt) if verify_next_restore_dt else ""
 verify_health = "missing"
 verify_text = "No recovery proof record"
-verify_detail_text = verify_detail or "Run proof now to create the first recoverability proof."
+verify_detail_text = verify_detail or "Run an integrity check + restore drill now to create the first recoverability proof."
 
 if verify_state == "failed":
     verify_health = "failed"

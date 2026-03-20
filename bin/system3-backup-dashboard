@@ -250,7 +250,7 @@ def color_for_health(health):
 
 verify_health = status_summary.get("verify_health", "missing")
 verify_text = status_summary.get("verify_text", "No recovery proof record")
-verify_detail_text = status_summary.get("verify_detail", "Run proof now to create the first recoverability proof.")
+verify_detail_text = status_summary.get("verify_detail", "Run an integrity check + restore drill now to create the first recoverability proof.")
 verify_color = color_for_health(verify_health)
 verify_check_age = status_summary.get("verify_check_age", verify_check_age)
 verify_restore_age = status_summary.get("verify_restore_age", verify_restore_age)
@@ -394,7 +394,7 @@ if verify_health in ("failed", "stale", "missing"):
     verify_warning = {
         "failed": f"The latest recovery-proof pass failed. {display_name} should not present a healthy confidence signal until this is fixed.",
         "stale": "Backups are landing, but recoverability proof is overdue. The system should warn instead of silently staying healthy.",
-        "missing": "No recovery-proof record exists yet. Run proof now or wait for the next due pass.",
+        "missing": "No recovery-proof record exists yet. Run an integrity check + restore drill now or wait for the next due pass.",
     }.get(verify_health, "")
     print(f"""
 <div class="card" style="margin-bottom: 24px; border: 1px solid {verify_color};">
