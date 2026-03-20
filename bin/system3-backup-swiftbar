@@ -63,7 +63,11 @@ swiftbar_shell_command() {
     printf "'%s'" "$command"
 }
 
-mapfile -t MISSING_CREDENTIAL_VARS < <(system3_backup_missing_runtime_credentials)
+MISSING_CREDENTIAL_VARS=()
+while IFS= read -r missing_var; do
+    [[ -z "$missing_var" ]] && continue
+    MISSING_CREDENTIAL_VARS+=("$missing_var")
+done < <(system3_backup_missing_runtime_credentials)
 if (( ${#MISSING_CREDENTIAL_VARS[@]} > 0 )); then
     MISSING_TEXT="${MISSING_CREDENTIAL_VARS[*]}"
     MISSING_TEXT="${MISSING_TEXT// /, }"
