@@ -1,0 +1,19 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install runtime dependencies
+        run: brew install restic
+
+      - name: Run validation
+        run: bin/system3-backup-ci-check
