@@ -97,6 +97,11 @@ bin/system3-backup install \
 Those default to `24h` warning and `48h` critical so a laptop that sleeps or
 shuts down overnight does not throw an alarm too early.
 
+The macOS installer also prefers wake-friendly `StartCalendarInterval` slots
+when the backup interval maps cleanly to whole hours. That avoids the laptop
+case where `StartInterval` simply misses overnight firings and never catches up
+on wake.
+
 That creates, without overwriting existing files unless you pass `--force`:
 
 - `~/.config/system3-backup/system3-backup.env`

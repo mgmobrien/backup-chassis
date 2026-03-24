@@ -28,6 +28,33 @@ schedule_label_for_interval() {
     printf '%s + on login' "$interval_label"
 }
 
+launchd_schedule_block() {
+    local interval="$SCHEDULE_INTERVAL_SECONDS"
+
+    if [[ "$interval" =~ ^[0-9]+$ ]] && (( interval > 0 )) && (( interval % 3600 == 0 )); then
+        local hours=$((interval / 3600))
+        if (( hours > 0 && 24 % hours == 0 )); then
+            printf '    <key>StartCalendarInterval</key>\n'
+            printf '    <array>\n'
+            local hour=0
+            while (( hour < 24 )); do
+                printf '        <dict>\n'
+                printf '            <key>Hour</key>\n'
+                printf '            <integer>%d</integer>\n' "$hour"
+                printf '            <key>Minute</key>\n'
+                printf '            <integer>0</integer>\n'
+                printf '        </dict>\n'
+                hour=$((hour + hours))
+            done
+            printf '    </array>\n'
+            return
+        fi
+    fi
+
+    printf '    <key>StartInterval</key>\n'
+    printf '    <integer>%s</integer>\n' "$interval"
+}
+
 usage() {
     cat <<EOF
 Usage: system3-backup-install-macos [options]
@@ -475,8 +502,7 @@ write_file_if_allowed "$LAUNCH_AGENT_PATH" 0644 <<EOF
     </array>
     <key>RunAtLoad</key>
     <true/>
-    <key>StartInterval</key>
-    <integer>$SCHEDULE_INTERVAL_SECONDS</integer>
+$(launchd_schedule_block)
     <key>StandardOutPath</key>
     <string>$LOG_DIR/launchd-stdout.log</string>
     <key>StandardErrorPath</key>
@@ -487,6 +513,8 @@ write_file_if_allowed "$LAUNCH_AGENT_PATH" 0644 <<EOF
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>SYSTEM3_BACKUP_ENV_FILE</key>
         <string>$ENV_FILE</string>
+        <key>SYSTEM3_BACKUP_LAUNCHED_BY_SCHEDULER</key>
+        <string>1</string>
     </dict>
     <key>Nice</key>
     <integer>10</integer>

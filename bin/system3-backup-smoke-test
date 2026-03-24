@@ -168,6 +168,8 @@ PY
 
 echo "validate generated plist"
 plutil -lint "$LAUNCH_AGENT_PATH" >/dev/null
+assert_contains "StartCalendarInterval" "$LAUNCH_AGENT_PATH"
+assert_contains "SYSTEM3_BACKUP_LAUNCHED_BY_SCHEDULER" "$LAUNCH_AGENT_PATH"
 
 echo "validate generated plugin shell"
 bash -n "$SWIFTBAR_PLUGIN_PATH"

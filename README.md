@@ -361,6 +361,11 @@ Those backup-age thresholds are explicit because laptops sleep and shut down.
 The default policy should stay quiet for normal offline gaps and only escalate
 after a full day without a completed backup.
 
+On macOS, the installer prefers `StartCalendarInterval` when the requested
+interval maps cleanly to whole-hour slots. That matters because `launchd`
+misses `StartInterval` firings while the machine sleeps, but coalesces missed
+calendar slots into a single run on wake.
+
 ## For agents
 
 If an agent is setting this up for a human, the clean flow is:

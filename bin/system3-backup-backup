@@ -119,6 +119,59 @@ current_fail_count() {
     echo 0
 }
 
+recent_complete_backup_label() {
+    python3 - "$STATUS_FILE" "${SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS:-0}" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+
+status_path = sys.argv[1]
+try:
+    min_interval = int(sys.argv[2])
+except ValueError:
+    min_interval = 0
+
+if min_interval <= 0:
+    raise SystemExit(0)
+
+try:
+    with open(status_path) as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(0)
+
+if data.get("state") != "complete":
+    raise SystemExit(0)
+
+completed_at = data.get("completed_at", "")
+if not completed_at:
+    raise SystemExit(0)
+
+try:
+    dt = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+except ValueError:
+    raise SystemExit(0)
+
+if dt.tzinfo is None:
+    dt = dt.replace(tzinfo=timezone.utc)
+else:
+    dt = dt.astimezone(timezone.utc)
+
+age_seconds = max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
+if age_seconds >= min_interval:
+    raise SystemExit(0)
+
+if age_seconds < 3600:
+    label = f"{max(1, age_seconds // 60)}m ago"
+elif age_seconds < 86400:
+    label = f"{age_seconds // 3600}h ago"
+else:
+    label = f"{max(1, age_seconds // 86400)}d ago"
+
+print(label)
+PY
+}
+
 write_status() {
     export S3B_STATUS_FILE="$STATUS_FILE"
     export S3B_STATE="${1:-}"
@@ -283,6 +336,14 @@ if [[ -f "$PIDFILE" ]]; then
     rm -f "$PIDFILE"
 fi
 echo $$ > "$PIDFILE"
+
+if [[ "${SYSTEM3_BACKUP_LAUNCHED_BY_SCHEDULER:-0}" == "1" ]]; then
+    RECENT_COMPLETE_LABEL="$(recent_complete_backup_label || true)"
+    if [[ -n "$RECENT_COMPLETE_LABEL" ]]; then
+        system3_backup_log "Skipping scheduler-triggered backup: last completed backup was $RECENT_COMPLETE_LABEL, inside the $(system3_backup_format_interval_label "$SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS") minimum interval."
+        exit 0
+    fi
+fi
 
 load_backup_paths
 validate_optional_script "run wrapper script" "${SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT:-}"
