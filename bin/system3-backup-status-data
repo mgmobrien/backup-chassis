@@ -60,26 +60,28 @@ SNAPSHOTS_JSON=""
 STALE_SNAPSHOTS_JSON=""
 if [[ -f "$SNAP_CACHE" ]]; then
     STALE_SNAPSHOTS_JSON="$(cat "$SNAP_CACHE")"
-    CACHE_AGE="$(
-        python3 - "$SNAP_CACHE" <<'PY'
-import os
-import sys
-import time
-
-path = sys.argv[1]
-try:
-    age = max(0, int(time.time() - os.path.getmtime(path)))
-except OSError:
-    age = 999999999
-print(age)
-PY
-    )"
-    if [[ "$CACHE_AGE" -lt 21600 ]]; then
-        SNAPSHOTS_JSON="$STALE_SNAPSHOTS_JSON"
-    fi
+    SNAPSHOTS_JSON="$STALE_SNAPSHOTS_JSON"
 fi
 if [[ -z "$SNAPSHOTS_JSON" ]]; then
-    LIVE_SNAPSHOTS_JSON="$(restic snapshots --json 2>/dev/null || echo "")"
+    LIVE_SNAPSHOTS_JSON="$(
+        python3 <<'PY'
+import subprocess
+
+try:
+    result = subprocess.run(
+        ["restic", "snapshots", "--json"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=10,
+    )
+except Exception:
+    print("")
+else:
+    print(result.stdout.strip())
+PY
+    )"
     if [[ -n "$LIVE_SNAPSHOTS_JSON" && "$LIVE_SNAPSHOTS_JSON" != "[]" ]]; then
         SNAPSHOTS_JSON="$LIVE_SNAPSHOTS_JSON"
     elif [[ -n "$STALE_SNAPSHOTS_JSON" ]]; then
@@ -234,6 +236,18 @@ def snapshot_matches(snapshot):
         return bool(paths)
     return match_path in paths
 
+def progress_label(data):
+    last_progress = data.get("last_progress", "")
+    if last_progress:
+        return str(last_progress)
+    pct = data.get("pct", "")
+    if pct in ("", None):
+        return ""
+    try:
+        return f"{float(pct):g}%"
+    except (TypeError, ValueError):
+        return str(pct)
+
 latest_full = None
 for snapshot in sorted(snapshots, key=lambda item: item.get("time", ""), reverse=True):
     if snapshot_matches(snapshot):
@@ -369,8 +383,12 @@ elif current_state == "waiting_for_network":
 elif current_state == "retry_pending":
     status_code = "retry_pending"
     status_health = "warning"
-    last_progress = status.get("last_progress", "")
-    progress_detail = f"last progress {last_progress}" if last_progress else "backup attempt failed"
+    last_progress = progress_label(status)
+    progress_detail = (
+        f"last progress {last_progress}"
+        if last_progress
+        else "backup attempt failed before upload progress was reported"
+    )
     status_text = "Retry pending"
     status_detail = f"{progress_detail} · retry {status_next_attempt}"
 elif not latest_full:

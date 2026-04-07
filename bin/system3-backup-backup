@@ -285,16 +285,31 @@ ping_healthchecks_failure() {
     fi
 }
 
+classify_failure_state() {
+    local detail="$1"
+
+    if [[ "$detail" == "restic backup failed" ]] && [[ -f "$LOGFILE" ]]; then
+        if grep -Eiq 'no such host|i/o timeout|network is unreachable|temporary failure in name resolution|dial tcp|connection refused|tls handshake timeout|context deadline exceeded|connection reset by peer' "$LOGFILE"; then
+            echo "waiting_for_network"
+            return
+        fi
+    fi
+
+    echo "retry_pending"
+}
+
 record_failure() {
     local detail="$1"
     local phase="${2:-backup}"
     local fail_count
+    local status_state
     fail_count="$(current_fail_count)"
     fail_count=$((fail_count + 1))
     echo "$fail_count" > "$FAIL_COUNT_FILE"
     local next_attempt
     next_attempt="$(system3_backup_iso_utc_in_future "$SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS")"
-    write_status "retry_pending" "$phase" "$detail" "$next_attempt"
+    status_state="$(classify_failure_state "$detail")"
+    write_status "$status_state" "$phase" "$detail" "$next_attempt"
     system3_backup_log "$detail"
     notify_local_failure "$detail (failure $fail_count)"
     if (( fail_count >= SYSTEM3_BACKUP_FAIL_ALERT_THRESHOLD )); then

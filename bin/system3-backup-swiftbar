@@ -20,8 +20,6 @@ STORAGE_URL="${SYSTEM3_BACKUP_STORAGE_URL:-}"
 BACKUP_PROCESS_MATCH="${SYSTEM3_BACKUP_BACKUP_PROCESS_MATCH:-restic backup}"
 BACKUP_PID_FILE="$SYSTEM3_BACKUP_PID_FILE"
 VERIFY_PID_FILE="$SYSTEM3_BACKUP_VERIFY_PID_FILE"
-WARNING_TEXT_COLOR="#9A5B00"
-CRITICAL_TEXT_COLOR="#C2342C"
 
 pid_from_file() {
     local pid_file="$1"
@@ -44,7 +42,7 @@ swiftbar_shell_command() {
 
 section_label() {
     local label="$1"
-    echo "${label} | size=11 color=#666"
+    echo "${label} | font=HelveticaNeue-Bold size=13 color=#111"
 }
 
 MISSING_CREDENTIAL_VARS=()
@@ -57,7 +55,7 @@ if (( ${#MISSING_CREDENTIAL_VARS[@]} > 0 )); then
     MISSING_TEXT="${MISSING_TEXT// /, }"
     echo "🔴 No creds"
     echo "---"
-    echo "Missing credentials: ${MISSING_TEXT} | color=red"
+    echo "Missing credentials: ${MISSING_TEXT}"
     exit 0
 fi
 
@@ -283,15 +281,15 @@ PY
     if [[ -n "$STATUS_DATA" ]]; then
         if [[ "$UPLOAD_STATE" == "paused" ]]; then
             if [[ "$SUMMARY_LATEST_FULL_PRESENT" != "yes" ]]; then
-                echo "First backup paused | color=#FF9500 size=14"
+                echo "First backup paused | size=14"
             else
-                echo "Backup paused | color=#FF9500 size=14"
+                echo "Backup paused | size=14"
             fi
         else
             if [[ "$SUMMARY_LATEST_FULL_PRESENT" != "yes" ]]; then
-                echo "First backup running | color=#007AFF size=14"
+                echo "First backup running | size=14"
             else
-                echo "Backup running | color=#007AFF size=14"
+                echo "Backup running | size=14"
             fi
         fi
         echo "  $(echo "$STATUS_DATA" | sed -n '1p') | font=Menlo size=12"
@@ -299,18 +297,18 @@ PY
         echo "  $(echo "$STATUS_DATA" | sed -n '3p') | size=13"
         echo "  Elapsed: $(echo "$STATUS_DATA" | sed -n '4p') | size=13 color=#888"
     else
-        echo "Backup starting... | color=#007AFF size=14"
+        echo "Backup starting... | size=14"
     fi
 elif [[ "$UPLOAD_STATE" != "none" ]]; then
-    echo "Backup starting... | color=#007AFF size=14"
+    echo "Backup starting... | size=14"
 elif [[ "$SUMMARY_STATUS_CODE" == "verification_running" ]]; then
-    echo "Recovery proof running | color=#007AFF size=14"
+    echo "Recovery proof running | size=14"
     if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
         echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
     echo "  ${SUMMARY_STATUS_DETAIL} | size=13"
 elif [[ "$LAUNCHD_LOADED" -eq 0 ]]; then
-    echo "Backups paused | color=#FF9500 size=14"
+    echo "Backups paused | size=14"
 elif [[ "$SUMMARY_STATUS_CODE" == "maintenance_warning" ]]; then
     DETAIL="$(
         python3 - "$STATUS_FILE" <<'PY'
@@ -318,29 +316,37 @@ import json
 import sys
 from datetime import datetime
 
+def parse_time(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return None
+
 with open(sys.argv[1]) as f:
     data = json.load(f)
 
 failures = data.get("failures", 0)
 next_attempt = data.get("next_attempt", "")
 if next_attempt:
-    try:
-        target = datetime.strptime(next_attempt, "%Y-%m-%dT%H:%M:%S")
-        diff = target - datetime.now()
+    target = parse_time(next_attempt)
+    if target:
+        diff = target - datetime.now(target.tzinfo)
         mins = max(0, int(diff.total_seconds() / 60))
         if mins >= 60:
             when = f"{mins // 60}h {mins % 60}m"
         else:
             when = f"{mins}m"
         print(f"Next scheduled retry: ~{when}")
-    except Exception:
+    else:
         print("Next scheduled retry: scheduled")
 else:
     print("Next scheduled retry: scheduled")
 print(f"{failures} consecutive failure(s)")
 PY
     )"
-    echo "Snapshot completed, cleanup warning | color=${WARNING_TEXT_COLOR} size=14"
+    echo "Snapshot completed, cleanup warning | size=14"
     if [[ "$SUMMARY_LATEST_FULL_PRESENT" == "yes" ]]; then
         echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
@@ -354,21 +360,29 @@ import json
 import sys
 from datetime import datetime
 
+def parse_time(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return None
+
 with open(sys.argv[1]) as f:
     data = json.load(f)
 
 failures = data.get("failures", 0)
 next_attempt = data.get("next_attempt", "")
 if next_attempt:
-    try:
-        target = datetime.strptime(next_attempt, "%Y-%m-%dT%H:%M:%S")
-        diff = target - datetime.now()
+    target = parse_time(next_attempt)
+    if target:
+        diff = target - datetime.now(target.tzinfo)
         mins = max(0, int(diff.total_seconds() / 60))
         if mins >= 60:
             when = f"{mins // 60}h {mins % 60}m"
         else:
             when = f"{mins}m"
-    except Exception:
+    else:
         when = ""
 else:
     when = ""
@@ -380,7 +394,7 @@ else:
 print(f"{failures} consecutive failure(s)")
 PY
     )"
-    echo "Waiting for network | color=${WARNING_TEXT_COLOR} size=14"
+    echo "Waiting for network | size=14"
     if [[ "$SUMMARY_LATEST_FULL_PRESENT" == "yes" ]]; then
         echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
@@ -393,39 +407,59 @@ import json
 import sys
 from datetime import datetime
 
+def parse_time(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return None
+
+def progress_label(data):
+    last_progress = data.get("last_progress")
+    if last_progress:
+        return str(last_progress)
+    pct = data.get("pct")
+    if pct in ("", None):
+        return "before upload progress was reported"
+    try:
+        return f"{float(pct):g}%"
+    except (TypeError, ValueError):
+        return str(pct)
+
 with open(sys.argv[1]) as f:
     data = json.load(f)
 
 failures = data.get("failures", 0)
-last_pct = data.get("last_progress", "unknown")
+last_pct = progress_label(data)
 next_attempt = data.get("next_attempt", "")
 if next_attempt:
-    try:
-        target = datetime.strptime(next_attempt, "%Y-%m-%dT%H:%M:%S")
-        diff = target - datetime.now()
+    target = parse_time(next_attempt)
+    if target:
+        diff = target - datetime.now(target.tzinfo)
         mins = max(0, int(diff.total_seconds() / 60))
         if mins >= 60:
             when = f"{mins // 60}h {mins % 60}m"
         else:
             when = f"{mins}m"
         print(f"Last attempt reached {last_pct} — retry in ~{when}")
-    except Exception:
+    else:
         print(f"Last attempt reached {last_pct} — retry scheduled")
 else:
     print(f"Last attempt reached {last_pct} — retry scheduled")
 print(f"{failures} consecutive failure(s)")
 PY
     )"
-    echo "Backup failed, will retry | color=${WARNING_TEXT_COLOR} size=14"
+    echo "Backup failed, will retry | size=14"
     if [[ "$SUMMARY_LATEST_FULL_PRESENT" == "yes" ]]; then
         echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
     echo "  $(echo "$DETAIL" | sed -n '1p') | size=13"
     echo "  $(echo "$DETAIL" | sed -n '2p') | size=13 color=#888"
 elif [[ "$SUMMARY_STATUS_CODE" == "no_full_backup" ]]; then
-    echo "No full backup exists | color=#FF3B30 size=14"
+    echo "No full backup exists | size=14"
 elif [[ "$SUMMARY_STATUS_CODE" == "backup_delayed" || "$SUMMARY_STATUS_CODE" == "backup_delayed_proof_stale" ]]; then
-    echo "${DISPLAY_NAME} status: waiting for next automatic run | color=${WARNING_TEXT_COLOR} size=14"
+    echo "${DISPLAY_NAME} status: waiting for next automatic run | size=14"
     if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
         echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
@@ -440,7 +474,7 @@ elif [[ "$SUMMARY_STATUS_CODE" == "backup_delayed" || "$SUMMARY_STATUS_CODE" == 
         echo "  Restore drill: ${VERIFY_RESTORE_AGE} | size=13"
     fi
 elif [[ "$SUMMARY_STATUS_CODE" == "backup_overdue" ]]; then
-    echo "${DISPLAY_NAME} status: action recommended | color=${CRITICAL_TEXT_COLOR} size=14"
+    echo "${DISPLAY_NAME} status: action recommended | size=14"
     if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
         echo "  Last full backup: ${SUMMARY_LATEST_FULL_AGE} | size=13"
     fi
@@ -452,7 +486,7 @@ elif [[ "$SUMMARY_STATUS_CODE" == "backup_overdue" ]]; then
     echo "  No active failure is recorded, but backup age is past the quiet window. | size=13 color=#666"
 else
     if [[ "$SUMMARY_STATUS_CODE" == "verification_failed" ]]; then
-        echo "${DISPLAY_NAME} status: recovery proof failed | color=${CRITICAL_TEXT_COLOR} size=14"
+        echo "${DISPLAY_NAME} status: recovery proof failed | size=14"
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
             echo "  Last backup: ${SUMMARY_LATEST_FULL_AGE}${BACKUP_LINE_SUFFIX} | size=13"
         fi
@@ -467,14 +501,14 @@ else
         echo "  Restore drill: ${VERIFY_RESTORE_AGE}${VERIFY_RESTORE_LINE_SUFFIX} | size=13"
         echo "  Snapshot ${SUMMARY_LATEST_FULL_SNAPSHOT} | font=Menlo size=12 color=#888"
     elif [[ "$SUMMARY_STATUS_CODE" == "backup_proof_stale" ]]; then
-        echo "${DISPLAY_NAME} status: backup healthy, recovery proof stale | color=${WARNING_TEXT_COLOR} size=14"
+        echo "${DISPLAY_NAME} status: backup healthy, recovery proof stale | size=14"
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
             echo "  Last backup: ${SUMMARY_LATEST_FULL_AGE}${BACKUP_LINE_SUFFIX} | size=13"
         fi
         echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
         echo "  Restore drill: ${VERIFY_RESTORE_AGE}${VERIFY_RESTORE_LINE_SUFFIX} | size=13"
     else
-        echo "${DISPLAY_NAME} status: ${SUMMARY_STATUS_TEXT} | color=${WARNING_TEXT_COLOR} size=14"
+        echo "${DISPLAY_NAME} status: ${SUMMARY_STATUS_TEXT} | size=14"
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
             echo "  Last backup: ${SUMMARY_LATEST_FULL_AGE}${BACKUP_LINE_SUFFIX} | size=13"
         fi
@@ -493,7 +527,7 @@ section_label "Actions"
 if [[ "$UPLOAD_STATE" == "running" ]]; then
     echo "Pause upload | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "pkill -STOP -f \"$BACKUP_PROCESS_MATCH\"") terminal=false refresh=true"
 elif [[ "$UPLOAD_STATE" == "paused" ]]; then
-    echo "Resume upload | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "pkill -CONT -f \"$BACKUP_PROCESS_MATCH\"") terminal=false refresh=true color=#34C759"
+    echo "Resume upload | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "pkill -CONT -f \"$BACKUP_PROCESS_MATCH\"") terminal=false refresh=true"
 else
     PRIMARY_ACTION_KIND="backup"
     PRIMARY_ACTION_LABEL="Run backup now"
@@ -501,36 +535,31 @@ else
     PRIMARY_ACTION_PARAM1=""
     PRIMARY_ACTION_PARAM2=""
     PRIMARY_ACTION_TERMINAL="true"
-    PRIMARY_ACTION_COLOR=""
 
     if [[ "$LAUNCHD_LOADED" -eq 0 && -n "$SCHEDULER_PLIST" ]]; then
         PRIMARY_ACTION_KIND="schedule"
-        PRIMARY_ACTION_LABEL="Fix now: Resume automatic backups"
+        PRIMARY_ACTION_LABEL="Resume automatic backups"
         PRIMARY_ACTION_COMMAND="/bin/bash"
         PRIMARY_ACTION_PARAM1="-lc"
         PRIMARY_ACTION_PARAM2="$(swiftbar_shell_command "launchctl load \"$SCHEDULER_PLIST\"")"
         PRIMARY_ACTION_TERMINAL="false"
-        PRIMARY_ACTION_COLOR=" color=#34C759"
     elif [[ "$SUMMARY_STATUS_CODE" == "backup_proof_stale" || "$SUMMARY_STATUS_CODE" == "backup_delayed_proof_stale" || "$SUMMARY_STATUS_CODE" == "verification_failed" ]]; then
         PRIMARY_ACTION_KIND="verify"
-        PRIMARY_ACTION_LABEL="Fix now: Run integrity check + restore drill"
+        PRIMARY_ACTION_LABEL="Run integrity check + restore drill"
         PRIMARY_ACTION_COMMAND="$VERIFY_COMMAND"
         PRIMARY_ACTION_PARAM1="--force"
-        PRIMARY_ACTION_COLOR=" color=#34C759"
     elif [[ "$SUMMARY_STATUS_CODE" == "backup_delayed" || "$SUMMARY_STATUS_CODE" == "backup_overdue" || "$SUMMARY_STATUS_CODE" == "retry_pending" || "$SUMMARY_STATUS_CODE" == "waiting_for_network" ]]; then
-        PRIMARY_ACTION_LABEL="Fix now: Run backup now"
-        PRIMARY_ACTION_COLOR=" color=#34C759"
+        PRIMARY_ACTION_LABEL="Run backup now"
     elif [[ "$SUMMARY_STATUS_CODE" == "no_full_backup" ]]; then
-        PRIMARY_ACTION_LABEL="Fix now: Run first backup"
-        PRIMARY_ACTION_COLOR=" color=#34C759"
+        PRIMARY_ACTION_LABEL="Run first backup"
     fi
 
     if [[ -n "$PRIMARY_ACTION_PARAM2" ]]; then
-        echo "${PRIMARY_ACTION_LABEL} | bash=${PRIMARY_ACTION_COMMAND} param1=${PRIMARY_ACTION_PARAM1} param2=${PRIMARY_ACTION_PARAM2} terminal=${PRIMARY_ACTION_TERMINAL} refresh=true${PRIMARY_ACTION_COLOR}"
+        echo "${PRIMARY_ACTION_LABEL} | bash=${PRIMARY_ACTION_COMMAND} param1=${PRIMARY_ACTION_PARAM1} param2=${PRIMARY_ACTION_PARAM2} terminal=${PRIMARY_ACTION_TERMINAL} refresh=true"
     elif [[ -n "$PRIMARY_ACTION_PARAM1" ]]; then
-        echo "${PRIMARY_ACTION_LABEL} | bash=${PRIMARY_ACTION_COMMAND} param1=${PRIMARY_ACTION_PARAM1} terminal=${PRIMARY_ACTION_TERMINAL} refresh=true${PRIMARY_ACTION_COLOR}"
+        echo "${PRIMARY_ACTION_LABEL} | bash=${PRIMARY_ACTION_COMMAND} param1=${PRIMARY_ACTION_PARAM1} terminal=${PRIMARY_ACTION_TERMINAL} refresh=true"
     else
-        echo "${PRIMARY_ACTION_LABEL} | bash=${PRIMARY_ACTION_COMMAND} terminal=${PRIMARY_ACTION_TERMINAL} refresh=true${PRIMARY_ACTION_COLOR}"
+        echo "${PRIMARY_ACTION_LABEL} | bash=${PRIMARY_ACTION_COMMAND} terminal=${PRIMARY_ACTION_TERMINAL} refresh=true"
     fi
 fi
 
@@ -549,7 +578,7 @@ if [[ -n "$SCHEDULER_PLIST" ]]; then
         echo "Pause schedule | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "$PAUSE_CMD") terminal=false refresh=true"
     else
         RESUME_CMD="launchctl load \"$SCHEDULER_PLIST\""
-        echo "Resume schedule | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "$RESUME_CMD") terminal=false refresh=true color=#34C759"
+        echo "Resume schedule | bash=/bin/bash param1=-lc param2=$(swiftbar_shell_command "$RESUME_CMD") terminal=false refresh=true"
     fi
 fi
 
