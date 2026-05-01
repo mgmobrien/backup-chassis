@@ -356,6 +356,11 @@ if [[ "${SYSTEM3_BACKUP_LAUNCHED_BY_SCHEDULER:-0}" == "1" ]]; then
     RECENT_COMPLETE_LABEL="$(recent_complete_backup_label || true)"
     if [[ -n "$RECENT_COMPLETE_LABEL" ]]; then
         system3_backup_log "Skipping scheduler-triggered backup: last completed backup was $RECENT_COMPLETE_LABEL, inside the $(system3_backup_format_interval_label "$SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS") minimum interval."
+        # Send a success heartbeat to the monitor: the scheduler fired, the runner
+        # evaluated state, and the system is healthy — there is just no work to do.
+        # Without this, the monitor sees a missed ping and alerts DOWN, then UP on
+        # the next real run, producing a flap whenever real backups overrun a slot.
+        ping_healthchecks_success
         exit 0
     fi
 fi
