@@ -266,12 +266,6 @@ snapshot_machine_state() {
     system3_backup_log "Brewfile snapshot saved"
 }
 
-ping_healthchecks_start() {
-    if [[ -n "${HEALTHCHECKS_PING_URL:-}" ]]; then
-        curl -fsS -m 10 --retry 5 "${HEALTHCHECKS_PING_URL}/start" >/dev/null 2>&1 || true
-    fi
-}
-
 ping_healthchecks_success() {
     if [[ -n "${HEALTHCHECKS_PING_URL:-}" ]]; then
         curl -fsS -m 10 --retry 5 "$HEALTHCHECKS_PING_URL" >/dev/null 2>&1 || true
@@ -376,7 +370,10 @@ fi
 
 write_status "starting" "backup" "Backup starting"
 system3_backup_log "Starting backup"
-ping_healthchecks_start
+# Intentionally no /start ping. Healthchecks.io treats a /start without a
+# success within Grace as DOWN, but real backups can run several hours
+# (especially on prune-heavy slots). We rely on Period+Grace alone so
+# DOWN only fires on a true day-plus outage.
 
 if ! run_network_precheck; then
     exit 0
