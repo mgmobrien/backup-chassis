@@ -131,7 +131,7 @@ status_summary = json.loads(os.environ.get("SUMMARY_JSON", "{}"))
 running_pid = os.environ.get("RUNNING_PID", "")
 log_tail = os.environ.get("LOG_TAIL", "")
 hc_details_url = os.environ.get("HC_DETAILS_URL", "")
-display_name = os.environ.get("DISPLAY_NAME", "System 3 Backup")
+display_name = os.environ.get("DISPLAY_NAME", "Backup")
 storage_label = os.environ.get("STORAGE_LABEL", "")
 scheduler_label = os.environ.get("SCHEDULER_LABEL", "")
 schedule_label = os.environ.get("SCHEDULE_LABEL", "")
@@ -270,8 +270,18 @@ status_failures = status_summary.get("failures", status_failures)
 status_next_attempt = status_summary.get("next_attempt_label", status_next_attempt)
 latest_full_age = status_summary.get("latest_full_age", latest_full_age)
 latest_full_present = bool(status_summary.get("latest_full_present", bool(latest_full)))
+latest_full_size_label = status_summary.get("latest_full_size_label", f"{total_size_gb} GB")
+latest_full_file_count_label = status_summary.get("latest_full_file_count_label", f"{total_files:,} files")
 next_run_detail = status_summary.get("next_run_detail", "scheduled")
 next_run_label = status_summary.get("next_run_label", next_run_detail)
+running_title_label = status_summary.get("running_title_label", "running")
+running_progress_line = status_summary.get("running_progress_line", "")
+running_bytes_line = status_summary.get("running_bytes_line", "")
+running_files_line = status_summary.get("running_files_line", "")
+running_elapsed_label = status_summary.get("running_elapsed_label", elapsed_str)
+running_updated_label = status_summary.get("running_updated_label", "")
+running_stale_label = status_summary.get("running_stale_label", "")
+running_percent = status_summary.get("running_percent")
 
 paths_html = "<br>\n  ".join(html.escape(item) for item in paths_text.splitlines() if item.strip())
 
@@ -353,8 +363,8 @@ print(f"""<!DOCTYPE html>
   </div>
   <div class="card">
     <div class="card-label">Repository</div>
-    <div class="card-value">{total_size_gb} GB</div>
-    <div class="card-detail">{total_files:,} files · {snap_count} snapshots</div>
+    <div class="card-value">{html.escape(latest_full_size_label)}</div>
+    <div class="card-detail">{html.escape(latest_full_file_count_label)} · {snap_count} snapshots</div>
   </div>
   <div class="card">
     <div class="card-label">Schedule</div>
@@ -406,19 +416,32 @@ if verify_health in ("failed", "stale", "missing"):
 """)
 
 if is_uploading:
-    pct_int = min(int(upload_pct), 99)
-    print(f"""
-<div class="card" style="margin-bottom: 24px;">
-  <div class="card-label"><span class="live-dot"></span>Backup running</div>
-  <div class="card-value">{int(upload_gb_done)}/{int(upload_gb_total)} GB</div>
+    try:
+        pct_int = None if running_percent is None else max(0, min(int(running_percent), 99))
+    except (TypeError, ValueError):
+        pct_int = None
+    progress_html = ""
+    if pct_int is not None:
+        progress_html = f"""
   <div class="progress-container">
     <div class="progress-bar" style="width: {pct_int}%; background: #007AFF;"></div>
   </div>
+"""
+    stale_html = f'<div class="card-detail" style="margin-top: 4px; color: #FF9500;">{html.escape(running_stale_label)}</div>' if running_stale_label else ""
+    updated_html = f'<div class="card-detail" style="margin-top: 4px;">{html.escape(running_updated_label)}</div>' if running_updated_label else ""
+    print(f"""
+<div class="card" style="margin-bottom: 24px;">
+  <div class="card-label"><span class="live-dot"></span>Backup running</div>
+  <div class="card-value">{html.escape(running_title_label)}</div>
+{progress_html}
   <div style="margin-top: 8px;">
-    <span class="speed-stat"><span class="speed-value">{pct_int}%</span> <span class="speed-label">processed</span></span>
-    <span class="speed-stat"><span class="speed-value">{html.escape(elapsed_str)}</span> <span class="speed-label">elapsed</span></span>
+    <span class="speed-stat"><span class="speed-value">{html.escape(running_progress_line or 'Progress: sizing backup...')}</span></span>
+    <span class="speed-stat"><span class="speed-value">{html.escape(running_elapsed_label)}</span> <span class="speed-label">elapsed</span></span>
   </div>
-  <div class="card-detail" style="margin-top: 4px;">{int(upload_gb_done)}/{int(upload_gb_total)} GB processed · {upload_files_done:,} / {upload_total_files:,} files</div>
+  <div class="card-detail" style="margin-top: 4px;">{html.escape(running_bytes_line)}</div>
+  <div class="card-detail" style="margin-top: 4px;">{html.escape(running_files_line)}</div>
+  {updated_html}
+  {stale_html}
 </div>
 """)
 

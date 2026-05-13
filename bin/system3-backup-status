@@ -57,6 +57,9 @@ print(data.get("status_detail", ""))
 snapshot = data.get("latest_full_snapshot", "")
 if snapshot:
     print(f"Snapshot {snapshot}")
+repository = data.get("latest_full_repository_label", "")
+if data.get("latest_full_present") and repository:
+    print(repository)
 print(f"Recovery proof: {data.get('verify_text', 'No recovery proof record')}")
 check_age = data.get("verify_check_age", "")
 restore_age = data.get("verify_restore_age", "")

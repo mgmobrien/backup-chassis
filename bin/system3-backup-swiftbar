@@ -112,6 +112,14 @@ for key in (
     "next_run_detail",
     "next_run_label",
     "next_run_time",
+    "latest_full_repository_label",
+    "running_title_label",
+    "running_progress_line",
+    "running_bytes_line",
+    "running_files_line",
+    "running_elapsed_label",
+    "running_updated_label",
+    "running_stale_label",
 ):
     value = data.get(key, "")
     if isinstance(value, bool):
@@ -143,6 +151,14 @@ SUMMARY_LATEST_FULL_TITLE="$(echo "$SUMMARY_INFO" | sed -n '18p')"
 SUMMARY_NEXT_RUN_DETAIL="$(echo "$SUMMARY_INFO" | sed -n '19p')"
 SUMMARY_NEXT_RUN_LABEL="$(echo "$SUMMARY_INFO" | sed -n '20p')"
 SUMMARY_NEXT_RUN_TIME="$(echo "$SUMMARY_INFO" | sed -n '21p')"
+SUMMARY_LATEST_FULL_REPOSITORY_LABEL="$(echo "$SUMMARY_INFO" | sed -n '22p')"
+SUMMARY_RUNNING_TITLE="$(echo "$SUMMARY_INFO" | sed -n '23p')"
+SUMMARY_RUNNING_PROGRESS_LINE="$(echo "$SUMMARY_INFO" | sed -n '24p')"
+SUMMARY_RUNNING_BYTES_LINE="$(echo "$SUMMARY_INFO" | sed -n '25p')"
+SUMMARY_RUNNING_FILES_LINE="$(echo "$SUMMARY_INFO" | sed -n '26p')"
+SUMMARY_RUNNING_ELAPSED_LABEL="$(echo "$SUMMARY_INFO" | sed -n '27p')"
+SUMMARY_RUNNING_UPDATED_LABEL="$(echo "$SUMMARY_INFO" | sed -n '28p')"
+SUMMARY_RUNNING_STALE_LABEL="$(echo "$SUMMARY_INFO" | sed -n '29p')"
 
 RESTIC_PID=""
 RESTIC_PID="$(pid_from_file "$BACKUP_PID_FILE" || true)"
@@ -188,26 +204,22 @@ elif [[ -n "${SUMMARY_NEXT_RUN_DETAIL:-}" ]]; then
     BACKUP_LINE_SUFFIX=" (next ${SUMMARY_NEXT_RUN_DETAIL})"
 fi
 
-title_gb_from_status() {
-    python3 - "$STATUS_FILE" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1]) as f:
-    data = json.load(f)
-
-print(f"{int(data.get('gb_done', 0))}/{int(data.get('gb_total', 0))}GB")
-PY
+repository_line() {
+    if [[ "$SUMMARY_LATEST_FULL_PRESENT" == "yes" && -n "${SUMMARY_LATEST_FULL_REPOSITORY_LABEL:-}" ]]; then
+        echo "  ${SUMMARY_LATEST_FULL_REPOSITORY_LABEL} | size=13"
+    fi
 }
 
 # title bar
 
 if [[ "$UPLOAD_STATE" == "paused" && -f "$STATUS_FILE" ]]; then
-    TITLE_GB="$(title_gb_from_status 2>/dev/null || true)"
-    echo "${TITLE_GB:-paused} | sfimage=pause.circle.fill sfcolor=FF9500"
+    PAUSED_TITLE="${SUMMARY_RUNNING_TITLE:-paused}"
+    if [[ "$PAUSED_TITLE" == "running" ]]; then
+        PAUSED_TITLE="paused"
+    fi
+    echo "${PAUSED_TITLE} | sfimage=pause.circle.fill sfcolor=FF9500"
 elif [[ "$UPLOAD_STATE" == "running" && -f "$STATUS_FILE" ]]; then
-    TITLE_GB="$(title_gb_from_status 2>/dev/null || true)"
-    echo "${TITLE_GB:-running} | sfimage=arrow.triangle.2.circlepath sfcolor=007AFF"
+    echo "${SUMMARY_RUNNING_TITLE:-running} | sfimage=arrow.triangle.2.circlepath sfcolor=007AFF"
 elif [[ "$UPLOAD_STATE" == "paused" ]]; then
     echo "paused | sfimage=pause.circle.fill sfcolor=FF9500"
 elif [[ "$UPLOAD_STATE" == "running" ]]; then
@@ -247,38 +259,7 @@ echo "---"
 # section 1: status
 
 if [[ "$UPLOAD_STATE" != "none" && -f "$STATUS_FILE" ]]; then
-    STATUS_DATA="$(
-        python3 - "$STATUS_FILE" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1]) as f:
-    data = json.load(f)
-
-pct = data.get("pct", 0)
-gb_done = data.get("gb_done", 0)
-gb_total = data.get("gb_total", 0)
-files_done = data.get("files_done", 0)
-total_files = data.get("total_files", 0)
-elapsed = data.get("time", 0)
-gb_remaining = gb_total - gb_done
-filled = int(pct / 5)
-bar = "█" * filled + "░" * (20 - filled)
-if elapsed >= 3600:
-    elapsed_str = f"{int(elapsed // 3600)}h {int((elapsed % 3600) // 60)}m"
-elif elapsed >= 60:
-    elapsed_str = f"{int(elapsed // 60)}m"
-else:
-    elapsed_str = f"{int(elapsed)}s"
-
-print(f"{bar} {pct:.0f}%")
-print(f"{gb_done:.1f} GB of {int(gb_total)} GB processed ({int(gb_remaining)} GB remaining)")
-print(f"{files_done:,} of {total_files:,} files")
-print(elapsed_str)
-PY
-    )"
-
-    if [[ -n "$STATUS_DATA" ]]; then
+    if [[ -n "${SUMMARY_RUNNING_PROGRESS_LINE:-}" ]]; then
         if [[ "$UPLOAD_STATE" == "paused" ]]; then
             if [[ "$SUMMARY_LATEST_FULL_PRESENT" != "yes" ]]; then
                 echo "First backup paused | size=14"
@@ -292,10 +273,16 @@ PY
                 echo "Backup running | size=14"
             fi
         fi
-        echo "  $(echo "$STATUS_DATA" | sed -n '1p') | font=Menlo size=12"
-        echo "  $(echo "$STATUS_DATA" | sed -n '2p') | size=13"
-        echo "  $(echo "$STATUS_DATA" | sed -n '3p') | size=13"
-        echo "  Elapsed: $(echo "$STATUS_DATA" | sed -n '4p') | size=13 color=#888"
+        echo "  ${SUMMARY_RUNNING_PROGRESS_LINE} | font=Menlo size=12"
+        echo "  ${SUMMARY_RUNNING_BYTES_LINE} | size=13"
+        echo "  ${SUMMARY_RUNNING_FILES_LINE} | size=13"
+        echo "  Elapsed: ${SUMMARY_RUNNING_ELAPSED_LABEL:-0s} | size=13 color=#888"
+        if [[ -n "${SUMMARY_RUNNING_UPDATED_LABEL:-}" ]]; then
+            echo "  ${SUMMARY_RUNNING_UPDATED_LABEL} | size=13 color=#888"
+        fi
+        if [[ -n "${SUMMARY_RUNNING_STALE_LABEL:-}" ]]; then
+            echo "  ${SUMMARY_RUNNING_STALE_LABEL} | size=13 color=#FF9500"
+        fi
     else
         echo "Backup starting... | size=14"
     fi
@@ -497,6 +484,7 @@ else
         else
             echo "Last backup: recent${BACKUP_LINE_SUFFIX} | size=14"
         fi
+        repository_line
         echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
         echo "  Restore drill: ${VERIFY_RESTORE_AGE}${VERIFY_RESTORE_LINE_SUFFIX} | size=13"
         echo "  Snapshot ${SUMMARY_LATEST_FULL_SNAPSHOT} | font=Menlo size=12 color=#888"
@@ -505,6 +493,7 @@ else
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
             echo "  Last backup: ${SUMMARY_LATEST_FULL_AGE}${BACKUP_LINE_SUFFIX} | size=13"
         fi
+        repository_line
         echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
         echo "  Restore drill: ${VERIFY_RESTORE_AGE}${VERIFY_RESTORE_LINE_SUFFIX} | size=13"
     else
@@ -512,6 +501,7 @@ else
         if [[ -n "$SUMMARY_LATEST_FULL_AGE" ]]; then
             echo "  Last backup: ${SUMMARY_LATEST_FULL_AGE}${BACKUP_LINE_SUFFIX} | size=13"
         fi
+        repository_line
         echo "  Integrity check: ${VERIFY_CHECK_AGE}${VERIFY_CHECK_LINE_SUFFIX} | size=13"
         echo "  Restore drill: ${VERIFY_RESTORE_AGE}${VERIFY_RESTORE_LINE_SUFFIX} | size=13"
         echo "  ${SUMMARY_STATUS_DETAIL} | size=13 color=#888"

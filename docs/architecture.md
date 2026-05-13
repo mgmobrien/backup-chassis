@@ -99,7 +99,7 @@ The likely packaging sequence is:
 2. proven setup flow for one additional machine
 3. optional local setup helper or wizard after real demand exists
 
-The public name can be `System 3 Backup`.
+The public name is `Backup Chassis` unless Matt explicitly renames it.
 The local operator label can remain `Backup`.
 
 ## Portability boundary

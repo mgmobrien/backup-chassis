@@ -14,8 +14,8 @@ That means:
 
 - `Backup` is the active local visible label
 - this repo is the personal publication of the reusable chassis
-- it is not yet being presented as an official `System 3` company surface
-- if it later clears the promotion gate, the company-facing framing would likely be `System 3 Backup`
+- it is not a `System 3` product
+- existing `system3-backup-*` command and config names are legacy runtime namespace, not product branding
 
 ## What it is
 

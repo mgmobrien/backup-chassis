@@ -95,6 +95,32 @@ STATUS_JSON="{}"
 if [[ -f "$STATUS_FILE" ]]; then
     STATUS_JSON="$(cat "$STATUS_FILE")"
 fi
+STATUS_STATE="$(
+    SYSTEM3_BACKUP_STATUS_JSON="$STATUS_JSON" python3 <<'PY'
+import json
+import os
+
+try:
+    data = json.loads(os.environ.get("SYSTEM3_BACKUP_STATUS_JSON", "{}"))
+except Exception:
+    data = {}
+
+print(data.get("state", ""))
+PY
+)"
+NETWORK_PROBE_HTTP_CODE=""
+if [[ "$STATUS_STATE" == "waiting_for_network" && -n "$SYSTEM3_BACKUP_NETWORK_CHECK_URL" ]]; then
+    if [[ -n "${SYSTEM3_BACKUP_NETWORK_CHECK_HTTP_CODE_OVERRIDE:-}" ]]; then
+        NETWORK_PROBE_HTTP_CODE="$SYSTEM3_BACKUP_NETWORK_CHECK_HTTP_CODE_OVERRIDE"
+    elif command -v curl >/dev/null 2>&1; then
+        if ! NETWORK_PROBE_HTTP_CODE="$(curl -sS -m 4 --connect-timeout 2 -o /dev/null -w '%{http_code}' "$SYSTEM3_BACKUP_NETWORK_CHECK_URL" 2>/dev/null)"; then
+            NETWORK_PROBE_HTTP_CODE="000"
+        fi
+    else
+        NETWORK_PROBE_HTTP_CODE="000"
+    fi
+    NETWORK_PROBE_HTTP_CODE="${NETWORK_PROBE_HTTP_CODE:-000}"
+fi
 
 VERIFY_JSON="{}"
 if [[ -f "$VERIFY_STATUS_FILE" ]]; then
@@ -109,6 +135,8 @@ export SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH="$SNAPSHOT_MATCH_PATH"
 export SYSTEM3_BACKUP_BACKUP_PID="$BACKUP_PID"
 export SYSTEM3_BACKUP_VERIFY_PID="$VERIFY_PID"
 export SYSTEM3_BACKUP_MISSING_CREDENTIALS="$(IFS=,; echo "${MISSING_CREDENTIAL_VARS[*]}")"
+export SYSTEM3_BACKUP_NETWORK_CHECK_URL="${SYSTEM3_BACKUP_NETWORK_CHECK_URL:-}"
+export SYSTEM3_BACKUP_NETWORK_PROBE_HTTP_CODE="$NETWORK_PROBE_HTTP_CODE"
 export SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS="${SYSTEM3_BACKUP_SCHEDULE_INTERVAL_SECONDS:-0}"
 export SYSTEM3_BACKUP_WARN_AFTER_SECONDS="${SYSTEM3_BACKUP_WARN_AFTER_SECONDS:-86400}"
 export SYSTEM3_BACKUP_CRITICAL_AFTER_SECONDS="${SYSTEM3_BACKUP_CRITICAL_AFTER_SECONDS:-172800}"
@@ -192,6 +220,219 @@ def title_label(age):
         return ""
     return age[:-4] if age.endswith(" ago") else age
 
+def numeric_value(data, *keys):
+    for key in keys:
+        if key not in data:
+            continue
+        value = data.get(key)
+        if value in ("", None):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+def int_value(data, *keys):
+    value = numeric_value(data, *keys)
+    if value is None:
+        return None
+    return max(0, int(value))
+
+def compact_number(value, digits=1):
+    text = f"{value:.{digits}f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+def file_count_label(value):
+    if value is None or value <= 0:
+        return "file count unavailable"
+    value = int(value)
+    suffix = "file" if value == 1 else "files"
+    return f"{value:,} {suffix}"
+
+def repository_size_label(value):
+    if value is None or value <= 0:
+        return "size unavailable"
+    if value >= 1024**3:
+        return f"{value / 1024**3:.2f} GB"
+    if value >= 1024**2:
+        return f"{max(1, int(round(value / 1024**2))):,} MB"
+    if value >= 1024:
+        return f"{max(1, int(round(value / 1024))):,} KB"
+    return "less than 1 KB"
+
+def running_size_label(value):
+    if value is None or value <= 0:
+        return "0 bytes"
+    if value >= 1024**3:
+        return f"{compact_number(value / 1024**3, 1)} GB"
+    if value >= 1024**2:
+        return f"{max(1, int(round(value / 1024**2))):,} MB"
+    if value >= 1024:
+        return f"{max(1, int(round(value / 1024))):,} KB"
+    return "less than 1 KB"
+
+def compact_size_label(value, include_unit=True):
+    if value is None or value <= 0:
+        return ""
+    if value >= 1024**3:
+        label = compact_number(value / 1024**3, 1)
+        unit = "GB"
+    elif value >= 1024**2:
+        label = f"{max(1, int(round(value / 1024**2))):,}"
+        unit = "MB"
+    elif value >= 1024:
+        label = f"{max(1, int(round(value / 1024))):,}"
+        unit = "KB"
+    else:
+        label = "less than 1"
+        unit = "KB"
+    return f"{label}{unit}" if include_unit else label
+
+def compact_fraction_label(done, total):
+    if done is None or total is None or total <= 0:
+        return ""
+    done_unit = "GB" if done >= 1024**3 else "MB" if done >= 1024**2 else "KB"
+    total_unit = "GB" if total >= 1024**3 else "MB" if total >= 1024**2 else "KB"
+    if done_unit == total_unit:
+        return f"{compact_size_label(done, False)}/{compact_size_label(total, True)}"
+    return f"{compact_size_label(done, True)}/{compact_size_label(total, True)}"
+
+def elapsed_label(seconds):
+    try:
+        seconds = float(seconds or 0)
+    except (TypeError, ValueError):
+        seconds = 0
+    if seconds >= 3600:
+        return f"{int(seconds // 3600)}h {int((seconds % 3600) // 60)}m"
+    if seconds >= 60:
+        return f"{int(seconds // 60)}m"
+    return f"{int(seconds)}s"
+
+def progress_bar(percent):
+    percent = max(0, min(99, int(percent)))
+    filled = int(percent / 5)
+    return "█" * filled + "░" * (20 - filled)
+
+def running_progress(status, is_active):
+    if not is_active:
+        return {
+            "title": "",
+            "progress_line": "",
+            "bytes_line": "",
+            "files_line": "",
+            "elapsed_label": "",
+            "updated_label": "",
+            "stale_label": "",
+            "status_detail": "",
+            "percent": None,
+            "bytes_done": None,
+            "total_bytes_estimate": None,
+            "files_done": None,
+            "total_files_estimate": None,
+            "updated_age_seconds": None,
+        }
+
+    bytes_done = numeric_value(status, "bytes_done")
+    if bytes_done is None and numeric_value(status, "gb_done") is not None:
+        bytes_done = numeric_value(status, "gb_done") * 1024**3
+    bytes_done = max(0, bytes_done or 0)
+
+    total_bytes = numeric_value(status, "total_bytes_estimate", "total_bytes")
+    if total_bytes is None and numeric_value(status, "gb_total") is not None:
+        total_bytes = numeric_value(status, "gb_total") * 1024**3
+    total_bytes = max(0, total_bytes or 0)
+
+    files_done = int_value(status, "files_done") or 0
+    total_files = int_value(status, "total_files_estimate", "total_files") or 0
+    raw_pct = numeric_value(status, "pct")
+
+    has_total = total_bytes > 0
+    pct_from_bytes = (bytes_done / total_bytes * 100) if has_total else None
+    pct_value = raw_pct if raw_pct is not None else pct_from_bytes
+    if (pct_value is None or pct_value <= 0) and pct_from_bytes is not None:
+        pct_value = pct_from_bytes
+    finishing = bool(is_active and (
+        (raw_pct is not None and raw_pct >= 99.5) or
+        (pct_value is not None and pct_value >= 99.5) or
+        (has_total and bytes_done >= total_bytes)
+    ))
+
+    title = "running"
+    if finishing:
+        title = "finishing"
+    elif has_total and bytes_done <= total_bytes:
+        title = compact_fraction_label(bytes_done, total_bytes) or "running"
+
+    if finishing:
+        display_pct = 99
+        progress_line = f"{progress_bar(display_pct)} Progress: finishing"
+        status_detail_text = "finishing"
+    elif has_total:
+        display_pct = max(0, min(99, int(pct_value or 0)))
+        progress_line = f"{progress_bar(display_pct)} Progress: {display_pct}%"
+        status_detail_text = f"{display_pct}% complete"
+    elif bytes_done > 0:
+        progress_line = f"Progress: {running_size_label(bytes_done)} processed"
+        status_detail_text = f"{running_size_label(bytes_done)} processed"
+    else:
+        progress_line = "Progress: sizing backup..."
+        status_detail_text = "sizing backup..."
+
+    if has_total:
+        if bytes_done >= total_bytes:
+            remaining = "total estimate still updating"
+        else:
+            remaining = f"{running_size_label(total_bytes - bytes_done)} remaining"
+        byte_line = f"{running_size_label(bytes_done)} of about {running_size_label(total_bytes)} processed ({remaining})"
+    elif bytes_done > 0:
+        byte_line = f"{running_size_label(bytes_done)} processed; total still being estimated"
+    else:
+        byte_line = "Waiting for first progress update"
+
+    if total_files > 0 and files_done < total_files:
+        files_line = f"Files: {files_done:,} of about {total_files:,}"
+    elif total_files > 0 and files_done == total_files:
+        files_line = f"Files: {files_done:,} scanned; finalizing snapshot"
+    elif total_files > 0 and files_done > total_files:
+        files_line = f"Files: {files_done:,} scanned; total estimate updating"
+    elif files_done > 0:
+        files_line = f"Files: {files_done:,} scanned"
+    else:
+        files_line = "Files: counting..."
+
+    updated_dt = parse_time(status.get("updated_at", ""))
+    updated_label = ""
+    stale_label = ""
+    updated_age_s = None
+    if updated_dt:
+        updated_age_s = max(0, int((now - updated_dt).total_seconds()))
+        if updated_age_s < 90:
+            updated_label = "Updated: just now"
+        else:
+            updated_label = f"Updated: {max(1, updated_age_s // 60)}m ago"
+        if is_active and updated_age_s > 120:
+            stale_label = f"Status stale: last progress {max(1, updated_age_s // 60)}m ago"
+
+    return {
+        "title": title,
+        "progress_line": progress_line,
+        "bytes_line": byte_line,
+        "files_line": files_line,
+        "elapsed_label": elapsed_label(status.get("elapsed_s", status.get("time", 0))),
+        "updated_label": updated_label,
+        "stale_label": stale_label,
+        "status_detail": status_detail_text,
+        "percent": 99 if finishing else (max(0, min(99, int(pct_value or 0))) if has_total else None),
+        "bytes_done": int(bytes_done),
+        "total_bytes_estimate": int(total_bytes) if has_total else None,
+        "files_done": files_done,
+        "total_files_estimate": total_files if total_files > 0 else None,
+        "updated_age_seconds": updated_age_s,
+    }
+
 def fmt_next_attempt(value):
     dt = parse_time(value)
     if not dt:
@@ -259,11 +500,16 @@ latest_full_snapshot = ""
 latest_full_age = "none"
 latest_full_age_h = None
 latest_full_time = ""
+latest_full_bytes = None
+latest_full_files = None
 if latest_full:
     latest_full_dt = parse_time(latest_full.get("time", ""))
     latest_full_snapshot = latest_full.get("short_id", "")
     latest_full_age = age_label(latest_full_dt)
     latest_full_time = latest_full.get("time", "")
+    latest_full_summary = latest_full.get("summary", {}) if isinstance(latest_full.get("summary", {}), dict) else {}
+    latest_full_bytes = numeric_value(latest_full_summary, "total_bytes_processed")
+    latest_full_files = int_value(latest_full_summary, "total_files_processed")
     if latest_full_dt:
         latest_full_age_h = max(0, int((now - latest_full_dt).total_seconds() / 3600))
 
@@ -348,6 +594,20 @@ status_failures = int(status.get("failures", 0) or 0)
 next_attempt_raw = status.get("next_attempt", "")
 status_next_attempt = fmt_next_attempt(next_attempt_raw)
 is_uploading = bool(backup_pid) and current_state in ("uploading", "starting")
+running = running_progress(status, is_uploading)
+network_check_url = os.environ.get("SYSTEM3_BACKUP_NETWORK_CHECK_URL", "")
+network_probe_http_code = os.environ.get("SYSTEM3_BACKUP_NETWORK_PROBE_HTTP_CODE", "")
+network_probe_ran = bool(network_probe_http_code)
+network_reachable = None
+if network_probe_ran:
+    network_reachable = network_probe_http_code != "000"
+network_recovered = current_state == "waiting_for_network" and network_reachable is True
+waiting_for_network_active = current_state == "waiting_for_network" and not network_recovered
+effective_current_state = "network_available" if network_recovered else current_state
+
+latest_full_size_label = repository_size_label(latest_full_bytes)
+latest_full_file_count_label = file_count_label(latest_full_files)
+latest_full_repository_label = f"Repository: {latest_full_size_label} - {latest_full_file_count_label}"
 
 status_code = "backup_overdue"
 status_health = "critical"
@@ -362,9 +622,8 @@ if missing_credentials:
 elif is_uploading:
     status_code = "backup_running"
     status_health = "running"
-    pct = int(status.get("pct", 0) or 0)
     status_text = "Backup running"
-    status_detail = f"{pct}% complete"
+    status_detail = running["status_detail"]
 elif verify_health == "running":
     status_code = "verification_running"
     status_health = "running"
@@ -375,7 +634,7 @@ elif current_state == "maintenance_warning":
     status_health = "warning"
     status_text = "Maintenance warning"
     status_detail = f"Snapshot succeeded, cleanup failed · retry {status_next_attempt}"
-elif current_state == "waiting_for_network":
+elif waiting_for_network_active:
     status_code = "waiting_for_network"
     status_health = "warning"
     status_text = "Waiting for network"
@@ -433,10 +692,15 @@ result = {
     "status_health": status_health,
     "status_text": status_text,
     "status_detail": status_detail,
-    "current_state": current_state,
+    "current_state": effective_current_state,
+    "raw_current_state": current_state,
     "failures": status_failures,
     "next_attempt": next_attempt_raw,
     "next_attempt_label": status_next_attempt,
+    "network_check_configured": bool(network_check_url),
+    "network_probe_http_code": network_probe_http_code,
+    "network_reachable": network_reachable,
+    "network_recovered": network_recovered,
     "verify_health": verify_health,
     "verify_text": verify_text,
     "verify_detail": verify_detail_text,
@@ -456,6 +720,11 @@ result = {
     "latest_full_age_hours": latest_full_age_h,
     "latest_full_title": title_label(latest_full_age),
     "latest_full_time": latest_full_time,
+    "latest_full_bytes": int(latest_full_bytes) if latest_full_bytes is not None else None,
+    "latest_full_files": latest_full_files,
+    "latest_full_size_label": latest_full_size_label,
+    "latest_full_file_count_label": latest_full_file_count_label,
+    "latest_full_repository_label": latest_full_repository_label,
     "next_run_time": next_run_time,
     "next_run_label": next_run_label_text,
     "next_run_detail": next_run_detail_text,
@@ -464,6 +733,19 @@ result = {
     "critical_after_seconds": critical_after_s,
     "backup_running": bool(backup_pid),
     "verify_running": bool(verify_pid),
+    "running_title_label": running["title"],
+    "running_progress_line": running["progress_line"],
+    "running_bytes_line": running["bytes_line"],
+    "running_files_line": running["files_line"],
+    "running_elapsed_label": running["elapsed_label"],
+    "running_updated_label": running["updated_label"],
+    "running_stale_label": running["stale_label"],
+    "running_percent": running["percent"],
+    "running_bytes_done": running["bytes_done"],
+    "running_total_bytes_estimate": running["total_bytes_estimate"],
+    "running_files_done": running["files_done"],
+    "running_total_files_estimate": running["total_files_estimate"],
+    "running_updated_age_seconds": running["updated_age_seconds"],
     "missing_credentials": missing_credentials,
 }
 

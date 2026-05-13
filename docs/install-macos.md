@@ -108,7 +108,7 @@ That creates, without overwriting existing files unless you pass `--force`:
 - `~/.config/system3-backup/paths.txt`
 - `~/.config/system3-backup/excludes.txt`
 - `~/Library/LaunchAgents/com.system3.backup.plist`
-- `~/Library/Application Support/SwiftBar/Plugins/system3-backup.5m.sh`
+- `~/Library/Application Support/SwiftBar/Plugins/backup-chassis.1m.sh`
 
 You can override those output paths with flags such as:
 
@@ -116,7 +116,7 @@ You can override those output paths with flags such as:
 bin/system3-backup install --platform macos \
   --config-home ~/.config/system3-backup \
   --launch-agent-path ~/Library/LaunchAgents/com.system3.backup.plist \
-  --swiftbar-plugin-path ~/Library/Application\ Support/SwiftBar/Plugins/system3-backup.5m.sh
+  --swiftbar-plugin-path ~/Library/Application\ Support/SwiftBar/Plugins/backup-chassis.1m.sh
 ```
 
 ## 3. Edit the generated local config

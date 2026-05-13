@@ -27,6 +27,16 @@ assert_contains() {
     grep -F -q "$needle" "$haystack"
 }
 
+assert_not_contains() {
+    local needle="$1"
+    local haystack="$2"
+
+    if grep -F -q "$needle" "$haystack"; then
+        echo "Unexpected content in $haystack: $needle" >&2
+        exit 1
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --keep-temp)
@@ -58,7 +68,7 @@ STATE_DIR="$TMP_ROOT/state"
 LOG_DIR="$TMP_ROOT/log"
 DASHBOARD_DIR="$TMP_ROOT/dashboard"
 LAUNCH_AGENT_PATH="$TMP_ROOT/LaunchAgents/com.system3.backup.plist"
-SWIFTBAR_PLUGIN_PATH="$TMP_ROOT/SwiftBar/system3-backup.5m.sh"
+SWIFTBAR_PLUGIN_PATH="$TMP_ROOT/SwiftBar/backup-chassis.1m.sh"
 ENV_FILE="$CONFIG_HOME/system3-backup.env"
 SMOKE_DOCS="$TMP_ROOT/smoke-docs"
 SMOKE_SNAPSHOT_ID="smoke1234"
@@ -111,6 +121,9 @@ SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH="$SMOKE_DOCS"
 SYSTEM3_BACKUP_BACKUP_PROCESS_MATCH="__smoke_test_no_live_backup__"
 SYSTEM3_BACKUP_SCHEDULER_SERVICE=""
 SYSTEM3_BACKUP_DISPLAY_NAME="Backup smoke"
+SYSTEM3_BACKUP_PID_FILE="$TMP_ROOT/system3-backup.pid"
+SYSTEM3_BACKUP_NETWORK_CHECK_URL="https://example.invalid/backup-chassis-smoke"
+SYSTEM3_BACKUP_NETWORK_CHECK_HTTP_CODE_OVERRIDE="204"
 EOF
 
 python3 - "$STATE_DIR" "$SMOKE_DOCS" "$SMOKE_SNAPSHOT_ID" <<'PY'
@@ -187,6 +200,7 @@ echo "render cli status"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup" status > "$TMP_ROOT/status.txt"
 assert_contains "Backup smoke: Healthy" "$TMP_ROOT/status.txt"
 assert_contains "Snapshot $SMOKE_SNAPSHOT_ID" "$TMP_ROOT/status.txt"
+assert_contains "Repository: 1 KB - 1 file" "$TMP_ROOT/status.txt"
 assert_contains "Recovery proof: Recoverability verified" "$TMP_ROOT/status.txt"
 
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup" status --json > "$TMP_ROOT/status.json"
@@ -203,13 +217,116 @@ assert data["status_health"] == "ok", data
 assert data["status_text"] == "Healthy", data
 assert data["verify_health"] == "ok", data
 assert data["latest_full_snapshot"] == snapshot_id, data
+assert data["latest_full_size_label"] == "1 KB", data
+assert data["latest_full_file_count_label"] == "1 file", data
+assert data["latest_full_repository_label"] == "Repository: 1 KB - 1 file", data
 PY
 
 echo "render menubar"
 SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-swiftbar" > "$TMP_ROOT/swiftbar.txt"
 assert_contains "externaldrive.badge.checkmark" "$TMP_ROOT/swiftbar.txt"
 assert_contains "Last backup:" "$TMP_ROOT/swiftbar.txt"
+assert_contains "Repository: 1 KB - 1 file" "$TMP_ROOT/swiftbar.txt"
 assert_contains "$SMOKE_SNAPSHOT_ID" "$TMP_ROOT/swiftbar.txt"
+
+echo "render recovered network menubar"
+python3 - "$STATE_DIR" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+
+state_dir = sys.argv[1]
+next_attempt = (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=3)).isoformat().replace("+00:00", "Z")
+status = {
+    "state": "waiting_for_network",
+    "phase": "backup",
+    "failures": 1,
+    "next_attempt": next_attempt,
+    "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    "endpoint_http_code": "000",
+}
+
+with open(os.path.join(state_dir, "status.json"), "w") as f:
+    json.dump(status, f)
+PY
+
+SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup" status --json > "$TMP_ROOT/status-network-recovered.json"
+python3 - "$TMP_ROOT/status-network-recovered.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as handle:
+    data = json.load(handle)
+
+assert data["raw_current_state"] == "waiting_for_network", data
+assert data["current_state"] == "network_available", data
+assert data["network_probe_http_code"] == "204", data
+assert data["network_reachable"] is True, data
+assert data["network_recovered"] is True, data
+assert data["status_code"] != "waiting_for_network", data
+PY
+
+SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-swiftbar" > "$TMP_ROOT/swiftbar-network-recovered.txt"
+assert_contains "externaldrive.badge.checkmark" "$TMP_ROOT/swiftbar-network-recovered.txt"
+assert_not_contains "net | sfimage=wifi.slash" "$TMP_ROOT/swiftbar-network-recovered.txt"
+assert_not_contains "Waiting for network" "$TMP_ROOT/swiftbar-network-recovered.txt"
+
+echo "render running menubar"
+printf '%s\n' "$$" > "$TMP_ROOT/system3-backup.pid"
+python3 - "$STATE_DIR" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+
+state_dir = sys.argv[1]
+updated_at = (datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=3)).isoformat().replace("+00:00", "Z")
+status = {
+    "state": "uploading",
+    "phase": "backup",
+    "pct": 100,
+    "bytes_done": 150 * 1024 * 1024,
+    "total_bytes_estimate": 128 * 1024 * 1024,
+    "files_done": 4426,
+    "total_files": 4425,
+    "elapsed_s": 61,
+    "time": 61,
+    "updated_at": updated_at,
+}
+
+with open(os.path.join(state_dir, "status.json"), "w") as f:
+    json.dump(status, f)
+PY
+
+SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup" status --json > "$TMP_ROOT/status-running.json"
+python3 - "$TMP_ROOT/status-running.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as handle:
+    data = json.load(handle)
+
+assert data["status_code"] == "backup_running", data
+assert data["status_detail"] == "finishing", data
+assert data["running_title_label"] == "finishing", data
+assert data["running_percent"] == 99, data
+assert "100%" not in data["running_progress_line"], data
+assert "total estimate still updating" in data["running_bytes_line"], data
+assert data["running_files_line"] == "Files: 4,426 scanned; total estimate updating", data
+assert data["running_stale_label"].startswith("Status stale: last progress"), data
+PY
+
+SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-swiftbar" > "$TMP_ROOT/swiftbar-running.txt"
+assert_contains "finishing | sfimage=arrow.triangle.2.circlepath" "$TMP_ROOT/swiftbar-running.txt"
+assert_contains "Progress: finishing" "$TMP_ROOT/swiftbar-running.txt"
+assert_contains "150 MB of about 128 MB processed (total estimate still updating)" "$TMP_ROOT/swiftbar-running.txt"
+assert_contains "Files: 4,426 scanned; total estimate updating" "$TMP_ROOT/swiftbar-running.txt"
+assert_contains "Status stale: last progress" "$TMP_ROOT/swiftbar-running.txt"
+assert_not_contains "0/0GB" "$TMP_ROOT/swiftbar-running.txt"
+assert_not_contains "100%" "$TMP_ROOT/swiftbar-running.txt"
+assert_not_contains "0 GB remaining" "$TMP_ROOT/swiftbar-running.txt"
+assert_not_contains "4,426 of 4,425" "$TMP_ROOT/swiftbar-running.txt"
 
 echo "check cli help"
 "$REPO_ROOT/bin/system3-backup" help > "$TMP_ROOT/help.txt"

@@ -1,4 +1,4 @@
-# Example exclusions for System 3 Backup
+# Example exclusions for Backup Chassis
 .DS_Store
 node_modules
 .git/objects

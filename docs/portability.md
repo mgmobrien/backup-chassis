@@ -51,7 +51,7 @@ Today that mostly maps to:
 - `bin/system3-backup-notify-macos`
 - `bin/system3-backup-swiftbar`
 - `templates/launchd/com.system3.backup.plist.example`
-- `templates/swiftbar/system3-backup.5m.sh.example`
+- `templates/swiftbar/backup-chassis.1m.sh.example`
 
 ## What portability does not mean
 
