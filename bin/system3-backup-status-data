@@ -363,43 +363,26 @@ def running_progress(status, is_active):
     title = "running"
     if finishing:
         title = "finishing"
-    elif has_total and bytes_done <= total_bytes:
-        title = compact_fraction_label(bytes_done, total_bytes) or "running"
+    elif bytes_done > 0:
+        title = compact_size_label(bytes_done) or "running"
 
     if finishing:
-        display_pct = 99
-        progress_line = f"{progress_bar(display_pct)} Progress: finishing"
+        progress_line = "Progress: finishing"
         status_detail_text = "finishing"
-    elif has_total:
-        display_pct = max(0, min(99, int(pct_value or 0)))
-        progress_line = f"{progress_bar(display_pct)} Progress: {display_pct}%"
-        status_detail_text = f"{display_pct}% complete"
     elif bytes_done > 0:
         progress_line = f"Progress: {running_size_label(bytes_done)} processed"
         status_detail_text = f"{running_size_label(bytes_done)} processed"
     else:
-        progress_line = "Progress: sizing backup..."
-        status_detail_text = "sizing backup..."
+        progress_line = "Progress: scanning and uploading"
+        status_detail_text = "scanning and uploading"
 
-    if has_total:
-        if bytes_done >= total_bytes:
-            remaining = "total estimate still updating"
-        else:
-            remaining = f"{running_size_label(total_bytes - bytes_done)} remaining"
-        byte_line = f"{running_size_label(bytes_done)} of about {running_size_label(total_bytes)} processed ({remaining})"
-    elif bytes_done > 0:
-        byte_line = f"{running_size_label(bytes_done)} processed; total still being estimated"
+    if bytes_done > 0:
+        byte_line = f"{running_size_label(bytes_done)} processed; scan estimate still updating"
     else:
-        byte_line = "Waiting for first progress update"
+        byte_line = "Scanning and uploading; total estimate still updating"
 
-    if total_files > 0 and files_done < total_files:
-        files_line = f"Files: {files_done:,} of about {total_files:,}"
-    elif total_files > 0 and files_done == total_files:
-        files_line = f"Files: {files_done:,} scanned; finalizing snapshot"
-    elif total_files > 0 and files_done > total_files:
+    if files_done > 0:
         files_line = f"Files: {files_done:,} scanned; total estimate updating"
-    elif files_done > 0:
-        files_line = f"Files: {files_done:,} scanned"
     else:
         files_line = "Files: counting..."
 
@@ -425,11 +408,11 @@ def running_progress(status, is_active):
         "updated_label": updated_label,
         "stale_label": stale_label,
         "status_detail": status_detail_text,
-        "percent": 99 if finishing else (max(0, min(99, int(pct_value or 0))) if has_total else None),
+        "percent": None,
         "bytes_done": int(bytes_done),
-        "total_bytes_estimate": int(total_bytes) if has_total else None,
+        "total_bytes_estimate": None,
         "files_done": files_done,
-        "total_files_estimate": total_files if total_files > 0 else None,
+        "total_files_estimate": None,
         "updated_age_seconds": updated_age_s,
     }
 
@@ -593,8 +576,10 @@ current_state = status.get("state", "")
 status_failures = int(status.get("failures", 0) or 0)
 next_attempt_raw = status.get("next_attempt", "")
 status_next_attempt = fmt_next_attempt(next_attempt_raw)
-is_uploading = bool(backup_pid) and current_state in ("uploading", "starting")
-running = running_progress(status, is_uploading)
+backup_process_active = bool(backup_pid)
+is_uploading = backup_process_active
+running_status = status if current_state in ("uploading", "starting") else {}
+running = running_progress(running_status, is_uploading)
 network_check_url = os.environ.get("SYSTEM3_BACKUP_NETWORK_CHECK_URL", "")
 network_probe_http_code = os.environ.get("SYSTEM3_BACKUP_NETWORK_PROBE_HTTP_CODE", "")
 network_probe_ran = bool(network_probe_http_code)
@@ -603,7 +588,12 @@ if network_probe_ran:
     network_reachable = network_probe_http_code != "000"
 network_recovered = current_state == "waiting_for_network" and network_reachable is True
 waiting_for_network_active = current_state == "waiting_for_network" and not network_recovered
-effective_current_state = "network_available" if network_recovered else current_state
+if backup_process_active and current_state not in ("uploading", "starting"):
+    effective_current_state = "uploading"
+elif network_recovered:
+    effective_current_state = "network_available"
+else:
+    effective_current_state = current_state
 
 latest_full_size_label = repository_size_label(latest_full_bytes)
 latest_full_file_count_label = file_count_label(latest_full_files)
@@ -619,7 +609,7 @@ if missing_credentials:
     status_health = "critical"
     status_text = "Missing credentials"
     status_detail = ", ".join(missing_credentials)
-elif is_uploading:
+elif backup_process_active:
     status_code = "backup_running"
     status_health = "running"
     status_text = "Backup running"
@@ -642,12 +632,14 @@ elif waiting_for_network_active:
 elif current_state == "retry_pending":
     status_code = "retry_pending"
     status_health = "warning"
+    failure_detail = status.get("detail", "")
     last_progress = progress_label(status)
-    progress_detail = (
-        f"last progress {last_progress}"
-        if last_progress
-        else "backup attempt failed before upload progress was reported"
-    )
+    if failure_detail:
+        progress_detail = failure_detail
+    elif last_progress:
+        progress_detail = f"last progress {last_progress}"
+    else:
+        progress_detail = "backup attempt failed before upload progress was reported"
     status_text = "Retry pending"
     status_detail = f"{progress_detail} · retry {status_next_attempt}"
 elif not latest_full:

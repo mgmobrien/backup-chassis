@@ -86,6 +86,12 @@ bin/system3-backup install --plan --json
 That prints the exact output paths and whether each file would be written or
 preserved before anything touches the machine.
 
+Existing `paths.txt` files are preserved by default. The installer only applies
+one automatic path migration: the old generated SwiftBar wrapper
+`restic-backup.5m.sh` is rewritten to the configured current wrapper path,
+normally `backup-chassis.1m.sh`. Other missing backup roots remain strict so a
+real user data path cannot disappear silently.
+
 The installer also exposes explicit backup-age thresholds:
 
 ```bash

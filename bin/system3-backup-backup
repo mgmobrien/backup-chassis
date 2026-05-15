@@ -18,6 +18,7 @@ PIDFILE="$SYSTEM3_BACKUP_PID_FILE"
 VERIFY_SCRIPT="${SYSTEM3_BACKUP_VERIFY_SCRIPT:-$SCRIPT_DIR/system3-backup-verify}"
 
 declare -a BACKUP_PATHS=()
+CONFIG_ERROR_DETAIL=""
 
 validate_optional_script() {
     local label="$1"
@@ -68,7 +69,8 @@ append_backup_path_if_missing() {
 
 load_backup_paths() {
     if [[ ! -f "$SYSTEM3_BACKUP_PATHS_FILE" ]]; then
-        echo "Configured paths file not found: $SYSTEM3_BACKUP_PATHS_FILE" >&2
+        CONFIG_ERROR_DETAIL="Configured paths file not found: $SYSTEM3_BACKUP_PATHS_FILE"
+        echo "$CONFIG_ERROR_DETAIL" >&2
         return 1
     fi
 
@@ -85,7 +87,8 @@ load_backup_paths() {
             continue
         fi
 
-        echo "Configured backup path not found: $resolved_path" >&2
+        CONFIG_ERROR_DETAIL="Configured backup path not found: $resolved_path"
+        echo "$CONFIG_ERROR_DETAIL" >&2
         return 1
     done < <(
         python3 - "$SYSTEM3_BACKUP_PATHS_FILE" <<'PY'
@@ -106,7 +109,8 @@ PY
     append_backup_path_if_missing "$SYSTEM3_BACKUP_CANARY_FILE"
 
     if (( ${#BACKUP_PATHS[@]} == 0 )); then
-        echo "No backup paths resolved from $SYSTEM3_BACKUP_PATHS_FILE" >&2
+        CONFIG_ERROR_DETAIL="No backup paths resolved from $SYSTEM3_BACKUP_PATHS_FILE"
+        echo "$CONFIG_ERROR_DETAIL" >&2
         return 1
     fi
 }
@@ -359,7 +363,13 @@ if [[ "${SYSTEM3_BACKUP_LAUNCHED_BY_SCHEDULER:-0}" == "1" ]]; then
     fi
 fi
 
-load_backup_paths
+if ! load_backup_paths; then
+    if [[ "$MODE" == "--check-config" ]]; then
+        exit 1
+    fi
+    record_failure "${CONFIG_ERROR_DETAIL:-Backup configuration invalid}" "config"
+    exit 1
+fi
 validate_optional_script "run wrapper script" "${SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT:-}"
 validate_optional_script "failure notify script" "${SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT:-}"
 

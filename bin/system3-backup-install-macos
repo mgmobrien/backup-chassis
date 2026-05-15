@@ -182,6 +182,50 @@ planned_action() {
     fi
 }
 
+paths_file_needs_swiftbar_migration() {
+    [[ -f "$PATHS_FILE" ]] || return 1
+    python3 - "$PATHS_FILE" "$LEGACY_SWIFTBAR_PLUGIN_PATH" "$SWIFTBAR_PLUGIN_PATH" <<'PY'
+import os
+import sys
+
+paths_file, legacy_path, target_path = sys.argv[1:4]
+
+def resolve(value):
+    return os.path.abspath(os.path.expandvars(os.path.expanduser(value)))
+
+legacy = resolve(legacy_path)
+target = resolve(target_path)
+if legacy == target:
+    raise SystemExit(1)
+
+try:
+    lines = open(paths_file).read().splitlines()
+except FileNotFoundError:
+    raise SystemExit(1)
+
+for raw in lines:
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        continue
+    if resolve(line) == legacy:
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
+planned_paths_action() {
+    if [[ -e "$PATHS_FILE" && "$FORCE" != "1" ]]; then
+        if paths_file_needs_swiftbar_migration; then
+            printf 'migrate'
+        else
+            printf 'preserve'
+        fi
+    else
+        printf 'write'
+    fi
+}
+
 emit_summary_json() {
     local mode="$1"
     local launch_agent_action="$2"
@@ -351,6 +395,7 @@ DASHBOARD_DIR="$(resolve_path "$DASHBOARD_DIR")"
 DASHBOARD_OUTPUT="$(resolve_path "$DASHBOARD_OUTPUT")"
 LAUNCH_AGENT_PATH="$(resolve_path "$LAUNCH_AGENT_PATH")"
 SWIFTBAR_PLUGIN_PATH="$(resolve_path "$SWIFTBAR_PLUGIN_PATH")"
+LEGACY_SWIFTBAR_PLUGIN_PATH="$(resolve_path "$HOME/Library/Application Support/SwiftBar/Plugins/restic-backup.5m.sh")"
 
 ENV_FILE="$CONFIG_HOME/system3-backup.env"
 PATHS_FILE="$CONFIG_HOME/paths.txt"
@@ -358,7 +403,7 @@ EXCLUDES_FILE="$CONFIG_HOME/excludes.txt"
 CANARY_FILE="$CONFIG_HOME/restore-canary-do-not-edit.txt"
 MACHINE_STATE_DIR="$CONFIG_HOME/machine-state"
 ENV_ACTION="$(planned_action "$ENV_FILE")"
-PATHS_ACTION="$(planned_action "$PATHS_FILE")"
+PATHS_ACTION="$(planned_paths_action)"
 EXCLUDES_ACTION="$(planned_action "$EXCLUDES_FILE")"
 LAUNCH_AGENT_ACTION="$(planned_action "$LAUNCH_AGENT_PATH")"
 SWIFTBAR_ACTION="$(planned_action "$SWIFTBAR_PLUGIN_PATH")"
@@ -407,6 +452,45 @@ copy_file_if_allowed() {
     cp "$source_path" "$target"
     chmod "$mode" "$target"
     log "write $target"
+}
+
+migrate_swiftbar_path_in_paths_file() {
+    [[ -f "$PATHS_FILE" ]] || return 0
+    python3 - "$PATHS_FILE" "$LEGACY_SWIFTBAR_PLUGIN_PATH" "$SWIFTBAR_PLUGIN_PATH" <<'PY'
+import os
+import sys
+
+paths_file, legacy_path, target_path = sys.argv[1:4]
+
+def resolve(value):
+    return os.path.abspath(os.path.expandvars(os.path.expanduser(value)))
+
+legacy = resolve(legacy_path)
+target = resolve(target_path)
+lines = open(paths_file).read().splitlines()
+target_present = any(
+    resolve(line.strip()) == target
+    for line in lines
+    if line.strip() and not line.strip().startswith("#")
+)
+
+changed = False
+output = []
+for raw in lines:
+    line = raw.strip()
+    if line and not line.startswith("#") and resolve(line) == legacy:
+        changed = True
+        if not target_present:
+            output.append(target_path)
+            target_present = True
+        continue
+    output.append(raw)
+
+if changed:
+    with open(paths_file, "w") as handle:
+        handle.write("\n".join(output) + "\n")
+PY
+    log "migrate $PATHS_FILE"
 }
 
 write_file_if_allowed "$ENV_FILE" 0644 <<EOF
@@ -487,6 +571,9 @@ SYSTEM3_BACKUP_RESTORE_INTERVAL_DAYS="30"
 EOF
 
 copy_file_if_allowed "$REPO_ROOT/config/paths.example" "$PATHS_FILE" 0644
+if [[ "$PATHS_ACTION" == "migrate" ]]; then
+    migrate_swiftbar_path_in_paths_file
+fi
 copy_file_if_allowed "$REPO_ROOT/config/excludes.example" "$EXCLUDES_FILE" 0644
 
 write_file_if_allowed "$LAUNCH_AGENT_PATH" 0644 <<EOF
