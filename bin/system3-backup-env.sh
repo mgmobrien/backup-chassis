@@ -101,6 +101,9 @@ system3_backup_require_runtime_credentials() {
 }
 
 system3_backup_load_env() {
+    local bundled_runtime_dir="${SYSTEM3_BACKUP_BUNDLED_RUNTIME_DIR:-}"
+    local bundled_runtime_file=""
+
     export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
     SYSTEM3_BACKUP_CONFIG_HOME="${SYSTEM3_BACKUP_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/system3-backup}"
@@ -172,6 +175,43 @@ system3_backup_load_env() {
     if [[ -z "$SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT" && "$SYSTEM3_BACKUP_ENABLE_MACOS_NOTIFICATIONS" == "1" ]]; then
         SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT="$SYSTEM3_BACKUP_BIN_DIR/system3-backup-notify-macos"
         export SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT
+    fi
+    if [[ -n "$bundled_runtime_dir" ]]; then
+        case "$bundled_runtime_dir" in
+            /*)
+                ;;
+            *)
+                echo "Bundled runtime directory must be absolute: $bundled_runtime_dir" >&2
+                return 1
+                ;;
+        esac
+        for bundled_runtime_file in \
+            system3-backup-backup \
+            system3-backup-env.sh \
+            system3-backup-notify-macos \
+            system3-backup-verify \
+            system3-backup-wrap-caffeinate
+        do
+            if [[ ! -x "$bundled_runtime_dir/$bundled_runtime_file" ]]; then
+                echo "Bundled runtime file is missing or not executable: $bundled_runtime_dir/$bundled_runtime_file" >&2
+                return 1
+            fi
+        done
+
+        export SYSTEM3_BACKUP_BUNDLED_RUNTIME_DIR="$bundled_runtime_dir"
+        export SYSTEM3_BACKUP_BIN_DIR="$bundled_runtime_dir"
+        export SYSTEM3_BACKUP_RUNTIME_ENTRYPOINT="$bundled_runtime_dir/system3-backup-backup"
+        export SYSTEM3_BACKUP_VERIFY_SCRIPT="$bundled_runtime_dir/system3-backup-verify"
+        if [[ "$SYSTEM3_BACKUP_USE_CAFFEINATE" == "1" ]]; then
+            export SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT="$bundled_runtime_dir/system3-backup-wrap-caffeinate"
+        else
+            export SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT=""
+        fi
+        if [[ "$SYSTEM3_BACKUP_ENABLE_MACOS_NOTIFICATIONS" == "1" ]]; then
+            export SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT="$bundled_runtime_dir/system3-backup-notify-macos"
+        else
+            export SYSTEM3_BACKUP_FAILURE_NOTIFY_SCRIPT=""
+        fi
     fi
     export SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH="${SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH:-}"
     if [[ -z "$SYSTEM3_BACKUP_SNAPSHOT_MATCH_PATH" && -f "$SYSTEM3_BACKUP_PATHS_FILE" ]]; then

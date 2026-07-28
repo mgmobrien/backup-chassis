@@ -68,6 +68,7 @@ STATE_DIR="$TMP_ROOT/state"
 LOG_DIR="$TMP_ROOT/log"
 DASHBOARD_DIR="$TMP_ROOT/dashboard"
 LAUNCH_AGENT_PATH="$TMP_ROOT/LaunchAgents/com.system3.backup.plist"
+RUNNER_APP_PATH="$TMP_ROOT/Applications/Backup Chassis Runner.app"
 SWIFTBAR_PLUGIN_PATH="$TMP_ROOT/SwiftBar/backup-chassis.1m.sh"
 ENV_FILE="$CONFIG_HOME/system3-backup.env"
 SMOKE_DOCS="$TMP_ROOT/smoke-docs"
@@ -83,16 +84,17 @@ SYSTEM3_BACKUP_PLAN_JSON="$TMP_ROOT/install-plan.json"
     --log-dir "$LOG_DIR" \
     --dashboard-dir "$DASHBOARD_DIR" \
     --launch-agent-path "$LAUNCH_AGENT_PATH" \
+    --runner-app-path "$RUNNER_APP_PATH" \
     --swiftbar-plugin-path "$SWIFTBAR_PLUGIN_PATH" \
     --display-name "Backup smoke" \
     --plan \
     --json > "$SYSTEM3_BACKUP_PLAN_JSON"
 
-python3 - "$SYSTEM3_BACKUP_PLAN_JSON" "$ENV_FILE" "$LAUNCH_AGENT_PATH" <<'PY'
+python3 - "$SYSTEM3_BACKUP_PLAN_JSON" "$ENV_FILE" "$LAUNCH_AGENT_PATH" "$RUNNER_APP_PATH" <<'PY'
 import json
 import sys
 
-plan_path, env_file, launch_agent_path = sys.argv[1:4]
+plan_path, env_file, launch_agent_path, runner_app_path = sys.argv[1:5]
 with open(plan_path) as handle:
     data = json.load(handle)
 
@@ -100,6 +102,7 @@ assert data["mode"] == "plan", data
 assert data["platform"] == "macos", data
 assert any(item["label"] == "env" and item["path"] == env_file for item in data["outputs"]), data
 assert any(item["label"] == "launch_agent" and item["path"] == launch_agent_path for item in data["outputs"]), data
+assert any(item["label"] == "runner_app" and item["path"] == runner_app_path for item in data["outputs"]), data
 PY
 
 echo "validate macos SwiftBar path migration"
@@ -109,6 +112,7 @@ MIGRATION_STATE_DIR="$MIGRATION_ROOT/state"
 MIGRATION_LOG_DIR="$MIGRATION_ROOT/log"
 MIGRATION_DASHBOARD_DIR="$MIGRATION_ROOT/dashboard"
 MIGRATION_LAUNCH_AGENT_PATH="$MIGRATION_ROOT/LaunchAgents/com.system3.backup.plist"
+MIGRATION_RUNNER_APP_PATH="$MIGRATION_ROOT/Applications/Backup Chassis Runner.app"
 MIGRATION_SWIFTBAR_DIR="$MIGRATION_ROOT/SwiftBar"
 MIGRATION_SWIFTBAR_PLUGIN_PATH="$MIGRATION_SWIFTBAR_DIR/backup-chassis.1m.sh"
 MIGRATION_LEGACY_SWIFTBAR_PATH="$HOME/Library/Application Support/SwiftBar/Plugins/restic-backup.5m.sh"
@@ -125,6 +129,7 @@ EOF
     --log-dir "$MIGRATION_LOG_DIR" \
     --dashboard-dir "$MIGRATION_DASHBOARD_DIR" \
     --launch-agent-path "$MIGRATION_LAUNCH_AGENT_PATH" \
+    --runner-app-path "$MIGRATION_RUNNER_APP_PATH" \
     --swiftbar-plugin-path "$MIGRATION_SWIFTBAR_PLUGIN_PATH" \
     --display-name "Backup migration smoke" \
     --plan \
@@ -149,6 +154,7 @@ PY
     --log-dir "$MIGRATION_LOG_DIR" \
     --dashboard-dir "$MIGRATION_DASHBOARD_DIR" \
     --launch-agent-path "$MIGRATION_LAUNCH_AGENT_PATH" \
+    --runner-app-path "$MIGRATION_RUNNER_APP_PATH" \
     --swiftbar-plugin-path "$MIGRATION_SWIFTBAR_PLUGIN_PATH" \
     --display-name "Backup migration smoke"
 
@@ -161,8 +167,44 @@ assert_not_contains "restic-backup.5m.sh" "$MIGRATION_PATHS_FILE"
     --log-dir "$LOG_DIR" \
     --dashboard-dir "$DASHBOARD_DIR" \
     --launch-agent-path "$LAUNCH_AGENT_PATH" \
+    --runner-app-path "$RUNNER_APP_PATH" \
     --swiftbar-plugin-path "$SWIFTBAR_PLUGIN_PATH" \
     --display-name "Backup smoke"
+
+echo "validate legacy launch-agent migration"
+plutil -replace ProgramArguments.0 -string "$REPO_ROOT/bin/system3-backup-backup" "$LAUNCH_AGENT_PATH"
+LAUNCH_MIGRATION_PLAN="$TMP_ROOT/launch-migration-plan.json"
+"$REPO_ROOT/bin/system3-backup" install --platform macos \
+    --config-home "$CONFIG_HOME" \
+    --state-dir "$STATE_DIR" \
+    --log-dir "$LOG_DIR" \
+    --dashboard-dir "$DASHBOARD_DIR" \
+    --launch-agent-path "$LAUNCH_AGENT_PATH" \
+    --runner-app-path "$RUNNER_APP_PATH" \
+    --swiftbar-plugin-path "$SWIFTBAR_PLUGIN_PATH" \
+    --display-name "Backup smoke" \
+    --plan \
+    --json > "$LAUNCH_MIGRATION_PLAN"
+python3 - "$LAUNCH_MIGRATION_PLAN" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as handle:
+    data = json.load(handle)
+
+outputs = {item["label"]: item for item in data["outputs"]}
+assert outputs["launch_agent"]["action"] == "migrate", data
+assert outputs["runner_app"]["action"] == "preserve", data
+PY
+"$REPO_ROOT/bin/system3-backup" install --platform macos \
+    --config-home "$CONFIG_HOME" \
+    --state-dir "$STATE_DIR" \
+    --log-dir "$LOG_DIR" \
+    --dashboard-dir "$DASHBOARD_DIR" \
+    --launch-agent-path "$LAUNCH_AGENT_PATH" \
+    --runner-app-path "$RUNNER_APP_PATH" \
+    --swiftbar-plugin-path "$SWIFTBAR_PLUGIN_PATH" \
+    --display-name "Backup smoke" >/dev/null
 
 cat > "$CONFIG_HOME/paths.txt" <<EOF
 $SMOKE_DOCS
@@ -236,6 +278,78 @@ echo "validate generated plist"
 plutil -lint "$LAUNCH_AGENT_PATH" >/dev/null
 assert_contains "StartCalendarInterval" "$LAUNCH_AGENT_PATH"
 assert_contains "SYSTEM3_BACKUP_LAUNCHED_BY_SCHEDULER" "$LAUNCH_AGENT_PATH"
+assert_contains "$RUNNER_APP_PATH/Contents/MacOS/backup-chassis-runner" "$LAUNCH_AGENT_PATH"
+
+echo "validate dedicated runner"
+codesign --verify --deep --strict "$RUNNER_APP_PATH"
+set +e
+"$RUNNER_APP_PATH/Contents/MacOS/backup-chassis-runner" --arbitrary-command \
+    > "$TMP_ROOT/runner-arguments.out" \
+    2> "$TMP_ROOT/runner-arguments.err"
+RUNNER_ARGUMENT_EXIT="$?"
+set -e
+if [[ "$RUNNER_ARGUMENT_EXIT" -ne 64 ]]; then
+    echo "Expected dedicated runner to reject arbitrary arguments with exit 64, got $RUNNER_ARGUMENT_EXIT" >&2
+    exit 1
+fi
+assert_contains "command arguments are not accepted" "$TMP_ROOT/runner-arguments.err"
+
+MUTATED_RUNNER_APP="$TMP_ROOT/Mutated Backup Chassis Runner.app"
+cp -R "$RUNNER_APP_PATH" "$MUTATED_RUNNER_APP"
+printf '\n# signature mutation probe\n' >> "$MUTATED_RUNNER_APP/Contents/Resources/bin/system3-backup-backup"
+if codesign --verify --deep --strict "$MUTATED_RUNNER_APP" >/dev/null 2>&1; then
+    echo "Expected sealed runner mutation to invalidate the code signature" >&2
+    exit 1
+fi
+
+SIGNAL_RUNNER_APP="$TMP_ROOT/Signal Backup Chassis Runner.app"
+cp -R "$RUNNER_APP_PATH" "$SIGNAL_RUNNER_APP"
+cat > "$SIGNAL_RUNNER_APP/Contents/Resources/bin/system3-backup-backup" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+trap 'printf "forwarded\n" > "$SYSTEM3_BACKUP_SIGNAL_RECEIPT"; exit 42' TERM
+printf 'ready\n' > "$SYSTEM3_BACKUP_SIGNAL_READY"
+while true; do
+    sleep 1
+done
+EOF
+chmod 0755 "$SIGNAL_RUNNER_APP/Contents/Resources/bin/system3-backup-backup"
+codesign --force --sign - --identifier com.system3.backup.runner "$SIGNAL_RUNNER_APP" >/dev/null
+
+SIGNAL_READY="$TMP_ROOT/runner-signal-ready"
+SIGNAL_RECEIPT="$TMP_ROOT/runner-signal-receipt"
+SYSTEM3_BACKUP_SIGNAL_READY="$SIGNAL_READY" \
+SYSTEM3_BACKUP_SIGNAL_RECEIPT="$SIGNAL_RECEIPT" \
+    "$SIGNAL_RUNNER_APP/Contents/MacOS/backup-chassis-runner" &
+SIGNAL_RUNNER_PID="$!"
+for _ in 1 2 3 4 5; do
+    [[ -f "$SIGNAL_READY" ]] && break
+    sleep 1
+done
+if [[ ! -f "$SIGNAL_READY" ]]; then
+    kill -TERM "$SIGNAL_RUNNER_PID" 2>/dev/null || true
+    wait "$SIGNAL_RUNNER_PID" 2>/dev/null || true
+    echo "Dedicated runner child did not become ready for signal test" >&2
+    exit 1
+fi
+kill -TERM "$SIGNAL_RUNNER_PID"
+set +e
+wait "$SIGNAL_RUNNER_PID"
+SIGNAL_RUNNER_EXIT="$?"
+set -e
+if [[ "$SIGNAL_RUNNER_EXIT" -ne 42 ]]; then
+    echo "Expected child exit 42 after forwarded SIGTERM, got $SIGNAL_RUNNER_EXIT" >&2
+    exit 1
+fi
+assert_contains "forwarded" "$SIGNAL_RECEIPT"
+
+SYSTEM3_BACKUP_ENV_FILE="$TMP_ROOT/caller-selected-env-is-not-allowed" \
+    "$RUNNER_APP_PATH/Contents/MacOS/backup-chassis-runner" --check-config \
+    > "$TMP_ROOT/runner-check-config.txt"
+RUNNER_RUNTIME_DIR="$(cd "$RUNNER_APP_PATH/Contents/Resources/bin" && pwd -P)"
+assert_contains "env_file=$ENV_FILE" "$TMP_ROOT/runner-check-config.txt"
+assert_contains "run_wrapper_script=$RUNNER_RUNTIME_DIR/system3-backup-wrap-caffeinate" "$TMP_ROOT/runner-check-config.txt"
 
 echo "validate generated plugin shell"
 bash -n "$SWIFTBAR_PLUGIN_PATH"
@@ -251,6 +365,7 @@ MISSING_STATE_DIR="$MISSING_ROOT/state"
 MISSING_LOG_DIR="$MISSING_ROOT/log"
 MISSING_DASHBOARD_DIR="$MISSING_ROOT/dashboard"
 MISSING_LAUNCH_AGENT_PATH="$MISSING_ROOT/LaunchAgents/com.system3.backup.plist"
+MISSING_RUNNER_APP_PATH="$MISSING_ROOT/Applications/Backup Chassis Runner.app"
 MISSING_SWIFTBAR_PLUGIN_PATH="$MISSING_ROOT/SwiftBar/backup-chassis.1m.sh"
 MISSING_ENV_FILE="$MISSING_CONFIG_HOME/system3-backup.env"
 MISSING_PATHS_FILE="$MISSING_CONFIG_HOME/paths.txt"
@@ -262,6 +377,7 @@ MISSING_BACKUP_PATH="$MISSING_ROOT/does-not-exist"
     --log-dir "$MISSING_LOG_DIR" \
     --dashboard-dir "$MISSING_DASHBOARD_DIR" \
     --launch-agent-path "$MISSING_LAUNCH_AGENT_PATH" \
+    --runner-app-path "$MISSING_RUNNER_APP_PATH" \
     --swiftbar-plugin-path "$MISSING_SWIFTBAR_PLUGIN_PATH" \
     --display-name "Backup missing-path smoke" >/dev/null
 cat > "$MISSING_PATHS_FILE" <<EOF
@@ -277,6 +393,16 @@ if SYSTEM3_BACKUP_ENV_FILE="$MISSING_ENV_FILE" "$REPO_ROOT/bin/system3-backup-ba
     exit 1
 fi
 assert_contains "Configured backup path not found: $MISSING_BACKUP_PATH" "$MISSING_ROOT/backup.err"
+
+if SYSTEM3_BACKUP_ENV_FILE="$MISSING_ENV_FILE" \
+    "$MISSING_RUNNER_APP_PATH/Contents/MacOS/backup-chassis-runner" --check-config \
+    > "$MISSING_ROOT/runner-check.out" \
+    2> "$MISSING_ROOT/runner-check.err"
+then
+    echo "Expected dedicated runner to propagate bundled runtime config failure" >&2
+    exit 1
+fi
+assert_contains "Configured backup path not found: $MISSING_BACKUP_PATH" "$MISSING_ROOT/runner-check.err"
 
 set +e
 SYSTEM3_BACKUP_ENV_FILE="$MISSING_ENV_FILE" "$REPO_ROOT/bin/system3-backup" status --json > "$MISSING_ROOT/status.json"

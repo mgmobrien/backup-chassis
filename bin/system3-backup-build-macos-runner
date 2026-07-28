@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+APP_PATH="$HOME/Applications/Backup Chassis Runner.app"
+ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/system3-backup/system3-backup.env"
+FORCE="0"
+
+usage() {
+    cat <<EOF
+Usage: system3-backup-build-macos-runner [options]
+
+Builds and ad-hoc signs the dedicated macOS Backup Chassis runner app.
+
+Options:
+  --app-path PATH   Output app bundle (default: $APP_PATH)
+  --env-file PATH   Machine config file bound into the runner
+  --force           Replace an existing app, preserving it beside the new app
+  -h, --help        Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --app-path)
+            APP_PATH="$2"
+            shift 2
+            ;;
+        --env-file)
+            ENV_FILE="$2"
+            shift 2
+            ;;
+        --force)
+            FORCE="1"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+    echo "The macOS runner can only be built on macOS." >&2
+    exit 1
+fi
+for command_name in clang codesign plutil; do
+    if ! command -v "$command_name" >/dev/null 2>&1; then
+        echo "Missing required command: $command_name" >&2
+        exit 1
+    fi
+done
+
+APP_PATH="$(python3 - "$APP_PATH" <<'PY'
+import os
+import sys
+
+print(os.path.abspath(os.path.expanduser(sys.argv[1])))
+PY
+)"
+ENV_FILE="$(python3 - "$ENV_FILE" <<'PY'
+import os
+import sys
+
+print(os.path.abspath(os.path.expanduser(sys.argv[1])))
+PY
+)"
+ENV_FILE_C_LITERAL="$(python3 - "$ENV_FILE" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1]))
+PY
+)"
+
+if [[ -e "$APP_PATH" && "$FORCE" != "1" ]]; then
+    echo "Runner app already exists; use --force to replace it: $APP_PATH" >&2
+    exit 1
+fi
+
+BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/backup-chassis-runner-build.XXXXXX")"
+cleanup() {
+    rm -rf "$BUILD_ROOT"
+}
+trap cleanup EXIT
+
+CANDIDATE_APP="$BUILD_ROOT/Backup Chassis Runner.app"
+CONTENTS_DIR="$CANDIDATE_APP/Contents"
+MACOS_DIR="$CONTENTS_DIR/MacOS"
+RUNTIME_DIR="$CONTENTS_DIR/Resources/bin"
+RUNNER_EXECUTABLE="$MACOS_DIR/backup-chassis-runner"
+
+mkdir -p "$MACOS_DIR" "$RUNTIME_DIR"
+
+cat > "$CONTENTS_DIR/Info.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Backup Chassis Runner</string>
+    <key>CFBundleExecutable</key>
+    <string>backup-chassis-runner</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.system3.backup.runner</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Backup Chassis Runner</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSBackgroundOnly</key>
+    <true/>
+</dict>
+</plist>
+EOF
+
+runtime_files=(
+    system3-backup-backup
+    system3-backup-env.sh
+    system3-backup-notify-macos
+    system3-backup-verify
+    system3-backup-wrap-caffeinate
+)
+for runtime_file in "${runtime_files[@]}"; do
+    cp "$REPO_ROOT/bin/$runtime_file" "$RUNTIME_DIR/$runtime_file"
+    chmod 0755 "$RUNTIME_DIR/$runtime_file"
+done
+
+clang \
+    -std=c11 \
+    -Wall \
+    -Wextra \
+    -Werror \
+    -O2 \
+    "-DSYSTEM3_BACKUP_ENV_FILE_PATH=$ENV_FILE_C_LITERAL" \
+    "$REPO_ROOT/src/macos/backup-chassis-runner.c" \
+    -o "$RUNNER_EXECUTABLE"
+
+plutil -lint "$CONTENTS_DIR/Info.plist" >/dev/null
+codesign --force --sign - --identifier com.system3.backup.runner "$CANDIDATE_APP"
+codesign --verify --deep --strict "$CANDIDATE_APP"
+
+mkdir -p "$(dirname "$APP_PATH")"
+if [[ -e "$APP_PATH" ]]; then
+    PREVIOUS_APP="${APP_PATH%.app}.previous-$(date +%Y%m%d-%H%M%S).app"
+    mv "$APP_PATH" "$PREVIOUS_APP"
+    echo "Preserved previous runner app: $PREVIOUS_APP"
+fi
+mv "$CANDIDATE_APP" "$APP_PATH"
+
+echo "Runner app ready: $APP_PATH"
+echo "Runner executable: $APP_PATH/Contents/MacOS/backup-chassis-runner"
+echo "Bound config: $ENV_FILE"

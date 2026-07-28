@@ -6,7 +6,7 @@
     <string>com.system3.backup</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/ABSOLUTE/PATH/TO/backup-chassis/bin/system3-backup-backup</string>
+        <string>/Users/USERNAME/Applications/Backup Chassis Runner.app/Contents/MacOS/backup-chassis-runner</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

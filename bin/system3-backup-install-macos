@@ -12,6 +12,7 @@ LOG_DIR="$HOME/.local/var/log/system3-backup"
 DASHBOARD_DIR="$HOME/.local/share/system3-backup"
 DASHBOARD_OUTPUT="$DASHBOARD_DIR/index.html"
 LAUNCH_AGENT_PATH="$HOME/Library/LaunchAgents/com.system3.backup.plist"
+RUNNER_APP_PATH="$HOME/Applications/Backup Chassis Runner.app"
 SWIFTBAR_PLUGIN_PATH="$HOME/Library/Application Support/SwiftBar/Plugins/backup-chassis.1m.sh"
 SERVICE_LABEL="com.system3.backup"
 DISPLAY_NAME="Backup"
@@ -19,6 +20,7 @@ SCHEDULE_INTERVAL_SECONDS="14400"
 WARN_AFTER_SECONDS="86400"
 CRITICAL_AFTER_SECONDS="172800"
 FORCE="0"
+MIGRATE_LAUNCH_AGENT="0"
 PLAN_ONLY="0"
 JSON_OUTPUT="0"
 
@@ -68,6 +70,7 @@ Options:
   --dashboard-dir PATH               Dashboard directory (default: $DASHBOARD_DIR)
   --dashboard-output PATH            Dashboard HTML output path
   --launch-agent-path PATH           launchd plist output path
+  --runner-app-path PATH             Dedicated signed runner app output path
   --swiftbar-plugin-path PATH        SwiftBar plugin output path
   --service-label LABEL              launchd service label
   --display-name NAME                Human-facing display name
@@ -77,6 +80,7 @@ Options:
   --plan                             Print the install plan without writing files
   --json                             Emit machine-readable output
   --force                            Overwrite existing generated files
+  --migrate-launch-agent             Repoint an existing custom launchd plist at the runner
   -h, --help                         Show this help
 EOF
 }
@@ -107,6 +111,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --launch-agent-path)
             LAUNCH_AGENT_PATH="$2"
+            shift 2
+            ;;
+        --runner-app-path)
+            RUNNER_APP_PATH="$2"
             shift 2
             ;;
         --swiftbar-plugin-path)
@@ -145,6 +153,10 @@ while [[ $# -gt 0 ]]; do
             FORCE="1"
             shift
             ;;
+        --migrate-launch-agent)
+            MIGRATE_LAUNCH_AGENT="1"
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -177,6 +189,26 @@ log() {
 planned_action() {
     if [[ -e "$1" && "$FORCE" != "1" ]]; then
         printf 'preserve'
+    else
+        printf 'write'
+    fi
+}
+
+launch_agent_needs_runner_migration() {
+    local current_program=""
+
+    [[ -f "$LAUNCH_AGENT_PATH" ]] || return 1
+    current_program="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$LAUNCH_AGENT_PATH" 2>/dev/null || true)"
+    [[ "$current_program" != "$RUNNER_EXECUTABLE" && "$current_program" == */system3-backup-backup ]]
+}
+
+planned_launch_agent_action() {
+    if [[ -e "$LAUNCH_AGENT_PATH" && "$FORCE" != "1" ]]; then
+        if [[ "$MIGRATE_LAUNCH_AGENT" == "1" ]] || launch_agent_needs_runner_migration; then
+            printf 'migrate'
+        else
+            printf 'preserve'
+        fi
     else
         printf 'write'
     fi
@@ -229,12 +261,13 @@ planned_paths_action() {
 emit_summary_json() {
     local mode="$1"
     local launch_agent_action="$2"
-    local swiftbar_action="$3"
-    local env_action="$4"
-    local paths_action="$5"
-    local excludes_action="$6"
+    local runner_app_action="$3"
+    local swiftbar_action="$4"
+    local env_action="$5"
+    local paths_action="$6"
+    local excludes_action="$7"
 
-    python3 - "$mode" "$CONFIG_HOME" "$STATE_DIR" "$LOG_DIR" "$DASHBOARD_DIR" "$DASHBOARD_OUTPUT" "$SERVICE_LABEL" "$DISPLAY_NAME" "$SCHEDULE_INTERVAL_SECONDS" "$WARN_AFTER_SECONDS" "$CRITICAL_AFTER_SECONDS" "$ENV_FILE" "$env_action" "$PATHS_FILE" "$paths_action" "$EXCLUDES_FILE" "$excludes_action" "$LAUNCH_AGENT_PATH" "$launch_agent_action" "$SWIFTBAR_PLUGIN_PATH" "$swiftbar_action" <<'PY'
+    python3 - "$mode" "$CONFIG_HOME" "$STATE_DIR" "$LOG_DIR" "$DASHBOARD_DIR" "$DASHBOARD_OUTPUT" "$SERVICE_LABEL" "$DISPLAY_NAME" "$SCHEDULE_INTERVAL_SECONDS" "$WARN_AFTER_SECONDS" "$CRITICAL_AFTER_SECONDS" "$ENV_FILE" "$env_action" "$PATHS_FILE" "$paths_action" "$EXCLUDES_FILE" "$excludes_action" "$LAUNCH_AGENT_PATH" "$launch_agent_action" "$RUNNER_APP_PATH" "$runner_app_action" "$SWIFTBAR_PLUGIN_PATH" "$swiftbar_action" <<'PY'
 import json
 import sys
 
@@ -258,6 +291,8 @@ import sys
     excludes_action,
     launch_agent_path,
     launch_agent_action,
+    runner_app_path,
+    runner_app_action,
     swiftbar_plugin_path,
     swiftbar_action,
 ) = sys.argv[1:]
@@ -280,18 +315,21 @@ data = {
         {"label": "paths", "path": paths_file, "action": paths_action},
         {"label": "excludes", "path": excludes_file, "action": excludes_action},
         {"label": "launch_agent", "path": launch_agent_path, "action": launch_agent_action},
+        {"label": "runner_app", "path": runner_app_path, "action": runner_app_action},
         {"label": "swiftbar_plugin", "path": swiftbar_plugin_path, "action": swiftbar_action},
     ],
     "validated_now": ["doctor"],
     "post_apply_validations": [
         "plutil",
+        "runner_code_signature",
         "swiftbar_shell_syntax",
         "check_config",
     ],
     "next_steps": [
         f"Edit {env_file}",
         f"Edit {paths_file}",
-        f'SYSTEM3_BACKUP_ENV_FILE="{env_file}" bin/system3-backup backup --check-config',
+        f"Grant Full Disk Access to {runner_app_path}",
+        f'SYSTEM3_BACKUP_ENV_FILE="{env_file}" "{runner_app_path}/Contents/MacOS/backup-chassis-runner" --check-config',
         f'plutil -lint "{launch_agent_path}"',
         f'launchctl load "{launch_agent_path}"',
     ],
@@ -307,10 +345,11 @@ PY
 emit_summary_text() {
     local mode="$1"
     local launch_agent_action="$2"
-    local swiftbar_action="$3"
-    local env_action="$4"
-    local paths_action="$5"
-    local excludes_action="$6"
+    local runner_app_action="$3"
+    local swiftbar_action="$4"
+    local env_action="$5"
+    local paths_action="$6"
+    local excludes_action="$7"
 
     if [[ "$mode" == "plan" ]]; then
         cat <<EOF
@@ -322,6 +361,7 @@ Planned outputs:
 - [$paths_action] paths: $PATHS_FILE
 - [$excludes_action] excludes: $EXCLUDES_FILE
 - [$launch_agent_action] launchd plist: $LAUNCH_AGENT_PATH
+- [$runner_app_action] signed runner app: $RUNNER_APP_PATH
 - [$swiftbar_action] SwiftBar plugin: $SWIFTBAR_PLUGIN_PATH
 
 Checked now:
@@ -329,6 +369,7 @@ Checked now:
 
 Will validate on apply:
 - plist syntax
+- runner code signature
 - SwiftBar wrapper shell syntax
 - generated env / config coherence via --check-config
 
@@ -347,20 +388,23 @@ Created or preserved:
 - paths: $PATHS_FILE
 - excludes: $EXCLUDES_FILE
 - launchd plist: $LAUNCH_AGENT_PATH
+- signed runner app: $RUNNER_APP_PATH
 - SwiftBar plugin: $SWIFTBAR_PLUGIN_PATH
 
 Validated automatically:
 - doctor prerequisites
 - plist syntax
+- runner code signature
 - SwiftBar wrapper shell syntax
 - generated env / config coherence via --check-config
 
 Next steps:
 1. Edit $ENV_FILE with your restic repository, credentials, and labels.
 2. Edit $PATHS_FILE with the directories you actually want backed up.
-3. Run: SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$REPO_ROOT/bin/system3-backup-backup" --check-config
-4. Validate the generated plist: plutil -lint "$LAUNCH_AGENT_PATH"
-5. Load the scheduler: launchctl load "$LAUNCH_AGENT_PATH"
+3. Grant Full Disk Access to "$RUNNER_APP_PATH".
+4. Run: SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$RUNNER_EXECUTABLE" --check-config
+5. Validate the generated plist: plutil -lint "$LAUNCH_AGENT_PATH"
+6. Load the scheduler: launchctl load "$LAUNCH_AGENT_PATH"
 EOF
 }
 
@@ -394,6 +438,8 @@ LOG_DIR="$(resolve_path "$LOG_DIR")"
 DASHBOARD_DIR="$(resolve_path "$DASHBOARD_DIR")"
 DASHBOARD_OUTPUT="$(resolve_path "$DASHBOARD_OUTPUT")"
 LAUNCH_AGENT_PATH="$(resolve_path "$LAUNCH_AGENT_PATH")"
+RUNNER_APP_PATH="$(resolve_path "$RUNNER_APP_PATH")"
+RUNNER_EXECUTABLE="$RUNNER_APP_PATH/Contents/MacOS/backup-chassis-runner"
 SWIFTBAR_PLUGIN_PATH="$(resolve_path "$SWIFTBAR_PLUGIN_PATH")"
 LEGACY_SWIFTBAR_PLUGIN_PATH="$(resolve_path "$HOME/Library/Application Support/SwiftBar/Plugins/restic-backup.5m.sh")"
 
@@ -405,14 +451,15 @@ MACHINE_STATE_DIR="$CONFIG_HOME/machine-state"
 ENV_ACTION="$(planned_action "$ENV_FILE")"
 PATHS_ACTION="$(planned_paths_action)"
 EXCLUDES_ACTION="$(planned_action "$EXCLUDES_FILE")"
-LAUNCH_AGENT_ACTION="$(planned_action "$LAUNCH_AGENT_PATH")"
+LAUNCH_AGENT_ACTION="$(planned_launch_agent_action)"
+RUNNER_APP_ACTION="$(planned_action "$RUNNER_APP_PATH")"
 SWIFTBAR_ACTION="$(planned_action "$SWIFTBAR_PLUGIN_PATH")"
 
 if [[ "$PLAN_ONLY" == "1" ]]; then
     if [[ "$JSON_OUTPUT" == "1" ]]; then
-        emit_summary_json "plan" "$LAUNCH_AGENT_ACTION" "$SWIFTBAR_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION"
+        emit_summary_json "plan" "$LAUNCH_AGENT_ACTION" "$RUNNER_APP_ACTION" "$SWIFTBAR_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION"
     else
-        emit_summary_text "plan" "$LAUNCH_AGENT_ACTION" "$SWIFTBAR_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION"
+        emit_summary_text "plan" "$LAUNCH_AGENT_ACTION" "$RUNNER_APP_ACTION" "$SWIFTBAR_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION"
     fi
     exit 0
 fi
@@ -423,6 +470,7 @@ mkdir -p \
     "$LOG_DIR" \
     "$DASHBOARD_DIR" \
     "$(dirname "$LAUNCH_AGENT_PATH")" \
+    "$(dirname "$RUNNER_APP_PATH")" \
     "$(dirname "$SWIFTBAR_PLUGIN_PATH")"
 
 write_file_if_allowed() {
@@ -576,6 +624,20 @@ if [[ "$PATHS_ACTION" == "migrate" ]]; then
 fi
 copy_file_if_allowed "$REPO_ROOT/config/excludes.example" "$EXCLUDES_FILE" 0644
 
+if [[ "$RUNNER_APP_ACTION" == "write" ]]; then
+    runner_build_args=(--app-path "$RUNNER_APP_PATH" --env-file "$ENV_FILE")
+    if [[ "$FORCE" == "1" ]]; then
+        runner_build_args+=(--force)
+    fi
+    "$REPO_ROOT/bin/system3-backup-build-macos-runner" "${runner_build_args[@]}"
+else
+    log "skip  $RUNNER_APP_PATH"
+fi
+
+if [[ "$LAUNCH_AGENT_ACTION" == "migrate" ]]; then
+    plutil -replace ProgramArguments.0 -string "$RUNNER_EXECUTABLE" "$LAUNCH_AGENT_PATH"
+    log "migrate $LAUNCH_AGENT_PATH"
+else
 write_file_if_allowed "$LAUNCH_AGENT_PATH" 0644 <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -585,7 +647,7 @@ write_file_if_allowed "$LAUNCH_AGENT_PATH" 0644 <<EOF
     <string>$SERVICE_LABEL</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$REPO_ROOT/bin/system3-backup-backup</string>
+        <string>$RUNNER_EXECUTABLE</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -612,6 +674,7 @@ $(launchd_schedule_block)
 </dict>
 </plist>
 EOF
+fi
 
 write_file_if_allowed "$SWIFTBAR_PLUGIN_PATH" 0755 <<EOF
 #!/usr/bin/env bash
@@ -627,9 +690,22 @@ EOF
 
 validate_generated_surface() {
     local validation_env
+    local launch_program
 
     log "validate $LAUNCH_AGENT_PATH"
     plutil -lint "$LAUNCH_AGENT_PATH" >/dev/null
+    launch_program="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$LAUNCH_AGENT_PATH")"
+    if [[ "$launch_program" != "$RUNNER_EXECUTABLE" ]]; then
+        echo "launchd ProgramArguments[0] does not use the dedicated runner: $launch_program" >&2
+        return 1
+    fi
+
+    log "validate $RUNNER_APP_PATH"
+    codesign --verify --deep --strict "$RUNNER_APP_PATH"
+    if [[ ! -x "$RUNNER_EXECUTABLE" ]]; then
+        echo "Runner executable is missing: $RUNNER_EXECUTABLE" >&2
+        return 1
+    fi
 
     log "validate $SWIFTBAR_PLUGIN_PATH"
     bash -n "$SWIFTBAR_PLUGIN_PATH"
@@ -662,7 +738,7 @@ PY
 
 validate_generated_surface
 if [[ "$JSON_OUTPUT" == "1" ]]; then
-    emit_summary_json "apply" "$LAUNCH_AGENT_ACTION" "$SWIFTBAR_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION"
+    emit_summary_json "apply" "$LAUNCH_AGENT_ACTION" "$RUNNER_APP_ACTION" "$SWIFTBAR_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION"
 else
-    emit_summary_text "apply" "$LAUNCH_AGENT_ACTION" "$SWIFTBAR_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION"
+    emit_summary_text "apply" "$LAUNCH_AGENT_ACTION" "$RUNNER_APP_ACTION" "$SWIFTBAR_ACTION" "$ENV_ACTION" "$PATHS_ACTION" "$EXCLUDES_ACTION"
 fi

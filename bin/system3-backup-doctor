@@ -48,6 +48,8 @@ portable_required_commands=(
 )
 
 macos_required_commands=(
+    clang
+    codesign
     launchctl
     plutil
 )
