@@ -16,7 +16,7 @@ Builds and ad-hoc signs the dedicated macOS Backup Chassis runner app.
 Options:
   --app-path PATH   Output app bundle (default: $APP_PATH)
   --env-file PATH   Machine config file bound into the runner
-  --force           Replace an existing app, preserving it beside the new app
+  --force           Replace and retire an existing runner app
   -h, --help        Show this help
 EOF
 }
@@ -86,7 +86,12 @@ if [[ -e "$APP_PATH" && "$FORCE" != "1" ]]; then
 fi
 
 BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/backup-chassis-runner-build.XXXXXX")"
+PRESERVE_BUILD_ROOT="0"
 cleanup() {
+    if [[ "$PRESERVE_BUILD_ROOT" == "1" ]]; then
+        echo "Preserved recovery artifacts after failed runner replacement: $BUILD_ROOT" >&2
+        return
+    fi
     rm -rf "$BUILD_ROOT"
 }
 trap cleanup EXIT
@@ -155,12 +160,26 @@ codesign --force --sign - --identifier com.system3.backup.runner "$CANDIDATE_APP
 codesign --verify --deep --strict "$CANDIDATE_APP"
 
 mkdir -p "$(dirname "$APP_PATH")"
+PREVIOUS_APP=""
 if [[ -e "$APP_PATH" ]]; then
-    PREVIOUS_APP="${APP_PATH%.app}.previous-$(date +%Y%m%d-%H%M%S).app"
+    PREVIOUS_APP="$BUILD_ROOT/previous-runner.app"
     mv "$APP_PATH" "$PREVIOUS_APP"
-    echo "Preserved previous runner app: $PREVIOUS_APP"
 fi
-mv "$CANDIDATE_APP" "$APP_PATH"
+if ! mv "$CANDIDATE_APP" "$APP_PATH"; then
+    if [[ -n "$PREVIOUS_APP" ]] && ! mv "$PREVIOUS_APP" "$APP_PATH"; then
+        PRESERVE_BUILD_ROOT="1"
+        echo "CRITICAL: failed to install the candidate and failed to restore the previous runner" >&2
+    fi
+    exit 1
+fi
+if ! codesign --verify --deep --strict "$APP_PATH"; then
+    mv "$APP_PATH" "$BUILD_ROOT/failed-candidate.app" || true
+    if [[ -n "$PREVIOUS_APP" ]] && ! mv "$PREVIOUS_APP" "$APP_PATH"; then
+        PRESERVE_BUILD_ROOT="1"
+        echo "CRITICAL: installed runner failed validation and the previous runner could not be restored" >&2
+    fi
+    exit 1
+fi
 
 echo "Runner app ready: $APP_PATH"
 echo "Runner executable: $APP_PATH/Contents/MacOS/backup-chassis-runner"

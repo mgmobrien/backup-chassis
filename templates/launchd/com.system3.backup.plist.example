@@ -53,13 +53,6 @@
     <string>/Users/USERNAME/.local/var/log/system3-backup/launchd-stdout.log</string>
     <key>StandardErrorPath</key>
     <string>/Users/USERNAME/.local/var/log/system3-backup/launchd-stderr.log</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-        <key>SYSTEM3_BACKUP_LAUNCHED_BY_SCHEDULER</key>
-        <string>1</string>
-    </dict>
     <key>Nice</key>
     <integer>10</integer>
     <key>LowPriorityIO</key>

@@ -287,7 +287,8 @@ config surface, a signed dedicated runner app, launchd plist, and SwiftBar
 wrapper without baking Matt-local paths into the public chassis. Launchd points
 at the native runner app instead of granting Full Disk Access to a
 general-purpose shell. The app seals the scheduler-facing scripts as signed
-resources and rejects arbitrary command arguments.
+resources, rejects arbitrary command arguments, pins the machine config path,
+and starts the bundled runtime with a minimal trusted environment.
 
 There is also now a first Linux bootstrap path that can lay down a local config
 surface plus `systemd --user` service/timer files without pretending the Linux

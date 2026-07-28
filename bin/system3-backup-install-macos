@@ -195,11 +195,29 @@ planned_action() {
 }
 
 launch_agent_needs_runner_migration() {
-    local current_program=""
-
     [[ -f "$LAUNCH_AGENT_PATH" ]] || return 1
-    current_program="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$LAUNCH_AGENT_PATH" 2>/dev/null || true)"
-    [[ "$current_program" != "$RUNNER_EXECUTABLE" && "$current_program" == */system3-backup-backup ]]
+    python3 - "$LAUNCH_AGENT_PATH" "$RUNNER_EXECUTABLE" <<'PY'
+import plistlib
+import sys
+
+plist_path, runner = sys.argv[1:3]
+try:
+    with open(plist_path, "rb") as handle:
+        arguments = plistlib.load(handle).get("ProgramArguments")
+except (OSError, plistlib.InvalidFileException):
+    raise SystemExit(1)
+
+if arguments == [runner]:
+    raise SystemExit(1)
+if (
+    isinstance(arguments, list)
+    and arguments
+    and isinstance(arguments[0], str)
+    and (arguments[0] == runner or arguments[0].endswith("/system3-backup-backup"))
+):
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
 }
 
 planned_launch_agent_action() {
@@ -329,7 +347,7 @@ data = {
         f"Edit {env_file}",
         f"Edit {paths_file}",
         f"Grant Full Disk Access to {runner_app_path}",
-        f'SYSTEM3_BACKUP_ENV_FILE="{env_file}" "{runner_app_path}/Contents/MacOS/backup-chassis-runner" --check-config',
+        f'"{runner_app_path}/Contents/MacOS/backup-chassis-runner" --check-config',
         f'plutil -lint "{launch_agent_path}"',
         f'launchctl load "{launch_agent_path}"',
     ],
@@ -370,6 +388,7 @@ Checked now:
 Will validate on apply:
 - plist syntax
 - runner code signature
+- runner-bound runtime and config paths
 - SwiftBar wrapper shell syntax
 - generated env / config coherence via --check-config
 
@@ -395,6 +414,7 @@ Validated automatically:
 - doctor prerequisites
 - plist syntax
 - runner code signature
+- runner-bound runtime and config paths
 - SwiftBar wrapper shell syntax
 - generated env / config coherence via --check-config
 
@@ -402,7 +422,7 @@ Next steps:
 1. Edit $ENV_FILE with your restic repository, credentials, and labels.
 2. Edit $PATHS_FILE with the directories you actually want backed up.
 3. Grant Full Disk Access to "$RUNNER_APP_PATH".
-4. Run: SYSTEM3_BACKUP_ENV_FILE="$ENV_FILE" "$RUNNER_EXECUTABLE" --check-config
+4. Run: "$RUNNER_EXECUTABLE" --check-config
 5. Validate the generated plist: plutil -lint "$LAUNCH_AGENT_PATH"
 6. Load the scheduler: launchctl load "$LAUNCH_AGENT_PATH"
 EOF
@@ -635,7 +655,14 @@ else
 fi
 
 if [[ "$LAUNCH_AGENT_ACTION" == "migrate" ]]; then
-    plutil -replace ProgramArguments.0 -string "$RUNNER_EXECUTABLE" "$LAUNCH_AGENT_PATH"
+    RUNNER_PROGRAM_ARGUMENTS_JSON="$(python3 - "$RUNNER_EXECUTABLE" <<'PY'
+import json
+import sys
+
+print(json.dumps([sys.argv[1]]))
+PY
+)"
+    plutil -replace ProgramArguments -json "$RUNNER_PROGRAM_ARGUMENTS_JSON" "$LAUNCH_AGENT_PATH"
     log "migrate $LAUNCH_AGENT_PATH"
 else
 write_file_if_allowed "$LAUNCH_AGENT_PATH" 0644 <<EOF
@@ -656,15 +683,6 @@ $(launchd_schedule_block)
     <string>$LOG_DIR/launchd-stdout.log</string>
     <key>StandardErrorPath</key>
     <string>$LOG_DIR/launchd-stderr.log</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-        <key>SYSTEM3_BACKUP_ENV_FILE</key>
-        <string>$ENV_FILE</string>
-        <key>SYSTEM3_BACKUP_LAUNCHED_BY_SCHEDULER</key>
-        <string>1</string>
-    </dict>
     <key>Nice</key>
     <integer>10</integer>
     <key>LowPriorityIO</key>
@@ -690,13 +708,26 @@ EOF
 
 validate_generated_surface() {
     local validation_env
-    local launch_program
+    local runner_check_output
+    local runner_runtime_entrypoint
 
     log "validate $LAUNCH_AGENT_PATH"
     plutil -lint "$LAUNCH_AGENT_PATH" >/dev/null
-    launch_program="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$LAUNCH_AGENT_PATH")"
-    if [[ "$launch_program" != "$RUNNER_EXECUTABLE" ]]; then
-        echo "launchd ProgramArguments[0] does not use the dedicated runner: $launch_program" >&2
+    if ! python3 - "$LAUNCH_AGENT_PATH" "$RUNNER_EXECUTABLE" <<'PY'
+import plistlib
+import sys
+
+plist_path, runner = sys.argv[1:3]
+with open(plist_path, "rb") as handle:
+    arguments = plistlib.load(handle).get("ProgramArguments")
+if arguments != [runner]:
+    print(
+        f"launchd ProgramArguments must be exactly [{runner!r}], got {arguments!r}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+    then
         return 1
     fi
 
@@ -704,6 +735,19 @@ validate_generated_surface() {
     codesign --verify --deep --strict "$RUNNER_APP_PATH"
     if [[ ! -x "$RUNNER_EXECUTABLE" ]]; then
         echo "Runner executable is missing: $RUNNER_EXECUTABLE" >&2
+        return 1
+    fi
+    runner_check_output="$("$RUNNER_EXECUTABLE" --self-check)"
+    runner_runtime_entrypoint="$(
+        cd -P "$RUNNER_APP_PATH/Contents/Resources/bin"
+        printf '%s/system3-backup-backup' "$PWD"
+    )"
+    if [[ "$runner_check_output" != *"runtime_entrypoint=$runner_runtime_entrypoint"* ]]; then
+        echo "Runner self-check did not report the installed bundled runtime" >&2
+        return 1
+    fi
+    if [[ "$runner_check_output" != *"env_file=$ENV_FILE"* ]]; then
+        echo "Runner self-check did not report the installed machine config" >&2
         return 1
     fi
 
