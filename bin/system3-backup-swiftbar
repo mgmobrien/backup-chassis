@@ -518,6 +518,68 @@ else
     fi
 fi
 
+# section 1b: permanent archive (only when configured)
+
+ARCHIVE_COMMAND="${SYSTEM3_ARCHIVE_ENTRYPOINT:-$SCRIPT_DIR/system3-backup-archive}"
+ARCHIVE_JSON="$("$ARCHIVE_COMMAND" status --json 2>/dev/null || true)"
+if [[ -n "$ARCHIVE_JSON" ]]; then
+    ARCHIVE_INFO="$(
+        ARCHIVE_STATUS_JSON="$ARCHIVE_JSON" python3 - <<'PY'
+import json, os
+try:
+    d = json.loads(os.environ.get("ARCHIVE_STATUS_JSON", "{}"))
+except Exception:
+    d = {}
+if not d.get("configured"):
+    raise SystemExit(0)
+state = d.get("state", "idle")
+items = d.get("items", 0)
+gb = (d.get("bytes_archived") or 0) / 1024**3
+if state == "uploading":
+    pct = d.get("pct")
+    pct_text = f"{pct:g}% " if isinstance(pct, (int, float)) else ""
+    print("running")
+    print(f"Archive uploading: {d.get('label','')}")
+    print(f"  {pct_text}{d.get('detail','')}")
+elif state == "failed":
+    print("failed")
+    print(f"Archive upload failed: {d.get('label','')}")
+    print(f"  {d.get('detail','')}")
+elif state == "interrupted":
+    print("interrupted")
+    print(f"Archive upload interrupted: {d.get('label','')}")
+    print("  Run the add command again to resume from the last snapshot.")
+else:
+    print("idle")
+    last = d.get("last_label", "")
+    when = (d.get("last_completed_at") or "")[:10]
+    if items:
+        print(f"Archive: {items} item(s), {gb:.1f} GB off this machine")
+        print(f"  Last: {last} ({when})")
+    else:
+        print("Archive: empty")
+        print("  Nothing has been archived from this machine yet.")
+PY
+    )"
+    if [[ -n "$ARCHIVE_INFO" ]]; then
+        ARCHIVE_STATE="$(echo "$ARCHIVE_INFO" | sed -n '1p')"
+        ARCHIVE_LINE1="$(echo "$ARCHIVE_INFO" | sed -n '2p')"
+        ARCHIVE_LINE2="$(echo "$ARCHIVE_INFO" | sed -n '3p')"
+        echo "---"
+        case "$ARCHIVE_STATE" in
+            running) echo ":archivebox.fill: ${ARCHIVE_LINE1} | size=14 sfcolor=007AFF" ;;
+            failed) echo ":archivebox.fill: ${ARCHIVE_LINE1} | size=14 sfcolor=FF3B30" ;;
+            interrupted) echo ":archivebox.fill: ${ARCHIVE_LINE1} | size=14 sfcolor=FF9500" ;;
+            *) echo ":archivebox.fill: ${ARCHIVE_LINE1} | size=14 sfcolor=#111" ;;
+        esac
+        echo "${ARCHIVE_LINE2} | size=13 color=#888"
+        ARCHIVE_MANIFEST="${SYSTEM3_ARCHIVE_MANIFEST_FILE:-$SYSTEM3_BACKUP_STATUS_DIR/archive-manifest.jsonl}"
+        if [[ -f "$ARCHIVE_MANIFEST" ]]; then
+            echo "  Open archive manifest | bash=/usr/bin/open param1=$ARCHIVE_MANIFEST terminal=false size=13"
+        fi
+    fi
+fi
+
 echo "---"
 
 # section 2: actions

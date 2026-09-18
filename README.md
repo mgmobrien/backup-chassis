@@ -353,7 +353,13 @@ bin/system3-backup status --json
 bin/system3-backup tray --platform linux
 bin/system3-backup verify --force
 bin/system3-backup smoke-test
+bin/system3-backup archive add ~/Old\ Projects --label old-projects-2026
+bin/system3-backup archive list
 ```
+
+`archive` is the second mode of the chassis: on-demand, no retention, separate
+repository, with a manifest of what has left the machine. See
+`docs/archive.md`.
 
 The install command is now programmatic:
 
