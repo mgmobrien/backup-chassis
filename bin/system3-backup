@@ -15,6 +15,7 @@ Commands:
   install [--platform macos|linux] Bootstrap a local install surface
   backup [args]                    Run a backup
   verify [args]                    Run an integrity check + restore drill
+  archive <add|list|restore|...>   Permanent archive (on demand, no retention)
   status [--json]                  Show operator-facing backup status
   dashboard [args]                 Render the local HTML dashboard
   tray [--platform linux]          Run the optional Linux tray surface
@@ -26,6 +27,8 @@ Examples:
   bin/system3-backup install --plan
   bin/system3-backup install --platform linux --json --plan
   bin/system3-backup status --json
+  bin/system3-backup archive add ~/Old\ Projects --label old-projects-2026
+  bin/system3-backup archive list
   bin/system3-backup tray --platform linux
   bin/system3-backup smoke-test
 EOF
@@ -119,6 +122,9 @@ case "$command_name" in
         ;;
     status)
         exec "$REPO_ROOT/bin/system3-backup-status" "$@"
+        ;;
+    archive)
+        exec "$REPO_ROOT/bin/system3-backup-archive" "$@"
         ;;
     dashboard)
         exec "$REPO_ROOT/bin/system3-backup-dashboard" "$@"

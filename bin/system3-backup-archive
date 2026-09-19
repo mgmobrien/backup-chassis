@@ -1,0 +1,431 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Permanent archive mode for backup-chassis.
+#
+# Backup answers "what if the disk dies" and runs on a schedule with retention.
+# Archive answers "this is finished, get it off the machine for good". It is
+# on demand, has no retention, and writes a manifest of what left the machine.
+# The two modes never share a repository; this script refuses to run if the
+# archive repository resolves to the backup repository.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/system3-backup-env.sh"
+system3_backup_load_env
+
+BACKUP_REPOSITORY="${RESTIC_REPOSITORY:-}"
+
+SYSTEM3_ARCHIVE_ENV_FILE="${SYSTEM3_ARCHIVE_ENV_FILE:-$SYSTEM3_BACKUP_CONFIG_HOME/system3-archive.env}"
+if [[ -f "$SYSTEM3_ARCHIVE_ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$SYSTEM3_ARCHIVE_ENV_FILE"
+    set +a
+fi
+
+export SYSTEM3_ARCHIVE_DISPLAY_NAME="${SYSTEM3_ARCHIVE_DISPLAY_NAME:-Archive}"
+export SYSTEM3_ARCHIVE_STORAGE_LABEL="${SYSTEM3_ARCHIVE_STORAGE_LABEL:-${RESTIC_REPOSITORY:-Configured archive storage}}"
+export SYSTEM3_ARCHIVE_STATUS_FILE="${SYSTEM3_ARCHIVE_STATUS_FILE:-$SYSTEM3_BACKUP_STATUS_DIR/archive-status.json}"
+export SYSTEM3_ARCHIVE_MANIFEST_FILE="${SYSTEM3_ARCHIVE_MANIFEST_FILE:-$SYSTEM3_BACKUP_STATUS_DIR/archive-manifest.jsonl}"
+export SYSTEM3_ARCHIVE_PID_FILE="${SYSTEM3_ARCHIVE_PID_FILE:-${TMPDIR:-/tmp}/system3-backup-archive.pid}"
+export SYSTEM3_ARCHIVE_LOG_DIR="${SYSTEM3_ARCHIVE_LOG_DIR:-$SYSTEM3_BACKUP_LOG_DIR}"
+export SYSTEM3_ARCHIVE_USE_CAFFEINATE="${SYSTEM3_ARCHIVE_USE_CAFFEINATE:-$SYSTEM3_BACKUP_USE_CAFFEINATE}"
+export SYSTEM3_ARCHIVE_RUN_WRAPPER_SCRIPT="${SYSTEM3_ARCHIVE_RUN_WRAPPER_SCRIPT:-${SYSTEM3_BACKUP_RUN_WRAPPER_SCRIPT:-}}"
+
+usage() {
+    cat <<USAGE
+Usage: system3-backup archive <command> [options]
+
+Permanent archive: on-demand, no retention, separate repository from backup.
+
+Commands:
+  add <path> [--label <name>] [--tag <tag>]... [--dry-run]
+                          Upload a path directly to the archive and record it
+                          in the manifest. Local files are never removed.
+  list [--json]           Show the manifest (what has left this machine)
+  snapshots [--json]      Show archive snapshots from the repository
+  restore <snapshot|label> <target-dir>
+                          Restore an archived item into target-dir
+  status [--json]         Operator-facing archive status
+  check-config            Validate configuration without touching the repo
+  help                    Show this help
+
+Configuration: $SYSTEM3_ARCHIVE_ENV_FILE
+Status file:   $SYSTEM3_ARCHIVE_STATUS_FILE
+Manifest:      $SYSTEM3_ARCHIVE_MANIFEST_FILE
+USAGE
+}
+
+fail() {
+    printf '%s\n' "$*" >&2
+    exit 1
+}
+
+archive_log() {
+    local message="$1"
+    local target="${2:-}"
+    local line
+    line="$(date '+%Y-%m-%d %H:%M:%S') — $message"
+    if [[ -n "$target" ]]; then
+        echo "$line" | tee -a "$target"
+    else
+        echo "$line"
+    fi
+}
+
+require_archive_config() {
+    [[ -f "$SYSTEM3_ARCHIVE_ENV_FILE" ]] || fail "Archive env file not found: $SYSTEM3_ARCHIVE_ENV_FILE"
+    [[ -n "${RESTIC_REPOSITORY:-}" ]] || fail "RESTIC_REPOSITORY is empty after loading $SYSTEM3_ARCHIVE_ENV_FILE"
+    if [[ -n "$BACKUP_REPOSITORY" && "$RESTIC_REPOSITORY" == "$BACKUP_REPOSITORY" ]]; then
+        fail "Refusing to run: archive repository equals the backup repository ($RESTIC_REPOSITORY). Archive and backup must be separate repositories."
+    fi
+    [[ -n "${RESTIC_PASSWORD:-}${RESTIC_PASSWORD_FILE:-}${RESTIC_PASSWORD_COMMAND:-}" ]] || fail "No restic password source set for the archive repository"
+    command -v restic >/dev/null 2>&1 || fail "restic not found on PATH"
+    mkdir -p "$(dirname "$SYSTEM3_ARCHIVE_STATUS_FILE")" "$(dirname "$SYSTEM3_ARCHIVE_MANIFEST_FILE")" "$SYSTEM3_ARCHIVE_LOG_DIR"
+}
+
+write_status() {
+    S3A_STATUS_FILE="$SYSTEM3_ARCHIVE_STATUS_FILE" \
+    S3A_STATE="${1:-}" S3A_DETAIL="${2:-}" S3A_LABEL="${3:-}" S3A_PATH="${4:-}" S3A_SNAPSHOT_ID="${5:-}" S3A_COMPLETED_AT="${6:-}" \
+    python3 - <<'PY'
+import json, os
+from datetime import datetime, timezone
+path = os.environ["S3A_STATUS_FILE"]
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+data.update({
+    "state": os.environ.get("S3A_STATE", ""),
+    "detail": os.environ.get("S3A_DETAIL", ""),
+    "label": os.environ.get("S3A_LABEL", ""),
+    "path": os.environ.get("S3A_PATH", ""),
+    "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+})
+for key in ("snapshot_id", "completed_at"):
+    value = os.environ.get("S3A_" + key.upper(), "")
+    if value:
+        data[key] = value
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f, indent=2)
+os.replace(tmp, path)
+PY
+}
+
+cmd_check_config() {
+    require_archive_config
+    printf 'archive env:      %s\n' "$SYSTEM3_ARCHIVE_ENV_FILE"
+    printf 'archive repo:     %s\n' "$RESTIC_REPOSITORY"
+    printf 'backup repo:      %s\n' "${BACKUP_REPOSITORY:-<none>}"
+    printf 'status file:      %s\n' "$SYSTEM3_ARCHIVE_STATUS_FILE"
+    printf 'manifest:         %s\n' "$SYSTEM3_ARCHIVE_MANIFEST_FILE"
+    printf 'credentials:      %s\n' "$( [[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]] && echo present || echo 'not set (ok for non-S3 backends)' )"
+    echo "config ok"
+}
+
+cmd_add() {
+    local source_path="" label="" dry_run=0
+    local -a tags=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --label) [[ $# -ge 2 ]] || fail "--label requires a value"; label="$2"; shift 2 ;;
+            --tag) [[ $# -ge 2 ]] || fail "--tag requires a value"; tags+=("$2"); shift 2 ;;
+            --dry-run) dry_run=1; shift ;;
+            -h|--help) usage; exit 0 ;;
+            -*) fail "Unknown option for add: $1" ;;
+            *) [[ -z "$source_path" ]] || fail "add takes exactly one path"; source_path="$1"; shift ;;
+        esac
+    done
+    [[ -n "$source_path" ]] || fail "add requires a path"
+    [[ -e "$source_path" ]] || fail "Path not found: $source_path"
+    source_path="$(cd "$(dirname "$source_path")" && pwd)/$(basename "$source_path")"
+    [[ -n "$label" ]] || label="$(basename "$source_path")"
+
+    require_archive_config
+
+    if [[ -f "$SYSTEM3_ARCHIVE_PID_FILE" ]]; then
+        local existing_pid
+        existing_pid="$(cat "$SYSTEM3_ARCHIVE_PID_FILE" 2>/dev/null || true)"
+        if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+            fail "An archive upload is already running (pid $existing_pid)"
+        fi
+        rm -f "$SYSTEM3_ARCHIVE_PID_FILE"
+    fi
+    echo $$ > "$SYSTEM3_ARCHIVE_PID_FILE"
+    trap 'rm -f "$SYSTEM3_ARCHIVE_PID_FILE"' EXIT
+
+    local logfile="$SYSTEM3_ARCHIVE_LOG_DIR/archive-$(date +%Y-%m-%d_%H%M%S).log"
+    local started_at
+    started_at="$(system3_backup_iso_utc_now)"
+    archive_log "Archive add: $source_path (label: $label)" "$logfile"
+
+    local -a cmd=(restic backup --json --exclude-caches --retry-lock 15m --tag archive --tag "label=$label")
+    local tag
+    for tag in "${tags[@]:-}"; do
+        [[ -n "$tag" ]] && cmd+=(--tag "$tag")
+    done
+    if [[ "$dry_run" -eq 1 ]]; then
+        cmd+=(--dry-run)
+    fi
+    cmd+=("$source_path")
+
+    local -a run_cmd
+    if [[ -n "$SYSTEM3_ARCHIVE_RUN_WRAPPER_SCRIPT" && -x "$SYSTEM3_ARCHIVE_RUN_WRAPPER_SCRIPT" ]]; then
+        run_cmd=("$SYSTEM3_ARCHIVE_RUN_WRAPPER_SCRIPT" "${cmd[@]}")
+    elif [[ "$SYSTEM3_ARCHIVE_USE_CAFFEINATE" == "1" ]] && command -v caffeinate >/dev/null 2>&1; then
+        run_cmd=(caffeinate -i "${cmd[@]}")
+    else
+        run_cmd=("${cmd[@]}")
+    fi
+
+    write_status "uploading" "Archive upload starting" "$label" "$source_path"
+
+    local parser
+    parser=$(cat <<'PY'
+import json, os, sys, time
+status_file = os.environ["S3A_STATUS_FILE"]
+log_file = os.environ["S3A_LOG_FILE"]
+label = os.environ["S3A_LABEL"]
+path = os.environ["S3A_PATH"]
+last_log = 0
+summary = None
+def write(data):
+    data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    tmp = status_file + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, status_file)
+for raw in sys.stdin:
+    line = raw.strip()
+    if not line:
+        continue
+    try:
+        msg = json.loads(line)
+    except Exception:
+        with open(log_file, "a") as lf:
+            lf.write(raw)
+        continue
+    mt = msg.get("message_type", "")
+    if mt == "status":
+        bytes_done = msg.get("bytes_done", 0)
+        total_bytes = msg.get("total_bytes", 0)
+        write({
+            "state": "uploading", "label": label, "path": path,
+            "pct": round(msg.get("percent_done", 0) * 100, 1),
+            "bytes_done": bytes_done, "total_bytes_estimate": total_bytes,
+            "files_done": msg.get("files_done", 0), "total_files_estimate": msg.get("total_files", 0),
+            "elapsed_s": msg.get("seconds_elapsed", 0),
+            "detail": f"{bytes_done/1024**3:.1f} of {total_bytes/1024**3:.1f} GB",
+        })
+        now = time.time()
+        if now - last_log >= 60:
+            with open(log_file, "a") as lf:
+                lf.write(f"Progress: {round(msg.get('percent_done',0)*100,1)}% - {bytes_done} / {total_bytes} bytes\n")
+            last_log = now
+    elif mt == "summary":
+        summary = msg
+        with open(log_file, "a") as lf:
+            lf.write(raw)
+    elif mt == "error":
+        with open(log_file, "a") as lf:
+            lf.write(raw)
+    else:
+        with open(log_file, "a") as lf:
+            lf.write(raw)
+if summary is not None:
+    print(json.dumps(summary))
+PY
+)
+    local summary_file
+    summary_file="$(mktemp "${TMPDIR:-/tmp}/system3-archive-summary.XXXXXX")"
+    set +e
+    "${run_cmd[@]}" 2>&1 | S3A_STATUS_FILE="$SYSTEM3_ARCHIVE_STATUS_FILE" S3A_LOG_FILE="$logfile" S3A_LABEL="$label" S3A_PATH="$source_path" python3 -u -c "$parser" > "$summary_file"
+    local restic_status=${PIPESTATUS[0]}
+    set -e
+    local result_json
+    result_json="$(cat "$summary_file")"
+    rm -f "$summary_file"
+
+    if [[ "$restic_status" -ne 0 || -z "$result_json" ]]; then
+        write_status "failed" "restic backup failed (exit $restic_status); see $logfile" "$label" "$source_path"
+        fail "Archive upload failed (exit $restic_status). Log: $logfile"
+    fi
+
+    if [[ "$dry_run" -eq 1 ]]; then
+        write_status "idle" "Dry run completed for $label" "$label" "$source_path"
+        printf 'dry run ok: %s\n' "$result_json"
+        return 0
+    fi
+
+    local snapshot_id completed_at
+    snapshot_id="$(printf '%s' "$result_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("snapshot_id",""))')"
+    completed_at="$(system3_backup_iso_utc_now)"
+    [[ -n "$snapshot_id" ]] || fail "restic reported success but no snapshot id was returned. Log: $logfile"
+
+    S3A_RESULT="$result_json" S3A_LABEL="$label" S3A_PATH="$source_path" S3A_SNAPSHOT="$snapshot_id" \
+    S3A_STARTED="$started_at" S3A_COMPLETED="$completed_at" S3A_REPO="$RESTIC_REPOSITORY" S3A_MANIFEST="$SYSTEM3_ARCHIVE_MANIFEST_FILE" \
+    python3 - <<'PY'
+import json, os, socket
+r = json.loads(os.environ["S3A_RESULT"])
+entry = {
+    "label": os.environ["S3A_LABEL"],
+    "path": os.environ["S3A_PATH"],
+    "host": socket.gethostname(),
+    "snapshot_id": os.environ["S3A_SNAPSHOT"],
+    "repository": os.environ["S3A_REPO"],
+    "started_at": os.environ["S3A_STARTED"],
+    "completed_at": os.environ["S3A_COMPLETED"],
+    "files": r.get("total_files_processed", 0),
+    "bytes": r.get("total_bytes_processed", 0),
+    "data_added": r.get("data_added", 0),
+    "local_removed": False,
+}
+with open(os.environ["S3A_MANIFEST"], "a") as f:
+    f.write(json.dumps(entry) + "\n")
+print(f"archived {entry['label']}: {entry['bytes']} bytes, {entry['files']} files, snapshot {entry['snapshot_id'][:8]}, new data {entry['data_added']} bytes")
+PY
+    write_status "complete" "Archived $label" "$label" "$source_path" "$snapshot_id" "$completed_at"
+    archive_log "Archive complete: $label -> $snapshot_id" "$logfile"
+    echo "Local copy left in place. Remove it only after you have checked the manifest entry."
+}
+
+cmd_list() {
+    local as_json=0
+    [[ "${1:-}" == "--json" ]] && as_json=1
+    [[ -f "$SYSTEM3_ARCHIVE_MANIFEST_FILE" ]] || { [[ "$as_json" -eq 1 ]] && echo "[]" || echo "Archive manifest is empty."; return 0; }
+    S3A_MANIFEST="$SYSTEM3_ARCHIVE_MANIFEST_FILE" S3A_JSON="$as_json" python3 - <<'PY'
+import json, os
+entries = []
+with open(os.environ["S3A_MANIFEST"]) as f:
+    for line in f:
+        line = line.strip()
+        if line:
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                pass
+if os.environ["S3A_JSON"] == "1":
+    print(json.dumps(entries, indent=2))
+else:
+    if not entries:
+        print("Archive manifest is empty.")
+    for e in entries:
+        gb = e.get("bytes", 0) / 1024**3
+        print(f"{e.get('completed_at','')[:10]}  {gb:7.2f} GB  {e.get('snapshot_id','')[:8]}  {e.get('label','')}  <- {e.get('path','')}")
+    total = sum(e.get("bytes", 0) for e in entries) / 1024**3
+    print(f"{len(entries)} item(s), {total:.2f} GB archived")
+PY
+}
+
+cmd_snapshots() {
+    require_archive_config
+    restic snapshots --tag archive "$@"
+}
+
+cmd_restore() {
+    local ref="${1:-}" target="${2:-}"
+    [[ -n "$ref" && -n "$target" ]] || fail "restore requires <snapshot|label> <target-dir>"
+    require_archive_config
+    local snapshot_id="$ref"
+    if [[ -f "$SYSTEM3_ARCHIVE_MANIFEST_FILE" ]]; then
+        local by_label
+        by_label="$(S3A_MANIFEST="$SYSTEM3_ARCHIVE_MANIFEST_FILE" S3A_REF="$ref" python3 - <<'PY'
+import json, os
+ref = os.environ["S3A_REF"]
+match = ""
+with open(os.environ["S3A_MANIFEST"]) as f:
+    for line in f:
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue
+        if e.get("label") == ref:
+            match = e.get("snapshot_id", "")
+print(match)
+PY
+)"
+        [[ -n "$by_label" ]] && snapshot_id="$by_label"
+    fi
+    mkdir -p "$target"
+    archive_log "Archive restore: $snapshot_id -> $target"
+    restic restore "$snapshot_id" --target "$target"
+}
+
+cmd_status() {
+    local as_json=0
+    [[ "${1:-}" == "--json" ]] && as_json=1
+    local running=0 pid=""
+    if [[ -f "$SYSTEM3_ARCHIVE_PID_FILE" ]]; then
+        pid="$(cat "$SYSTEM3_ARCHIVE_PID_FILE" 2>/dev/null || true)"
+        [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && running=1
+    fi
+    S3A_STATUS="$SYSTEM3_ARCHIVE_STATUS_FILE" S3A_MANIFEST="$SYSTEM3_ARCHIVE_MANIFEST_FILE" S3A_RUNNING="$running" S3A_JSON="$as_json" \
+    S3A_CONFIGURED="$( [[ -f "$SYSTEM3_ARCHIVE_ENV_FILE" ]] && echo 1 || echo 0 )" S3A_LABEL="$SYSTEM3_ARCHIVE_STORAGE_LABEL" python3 - <<'PY'
+import json, os
+status = {}
+if os.path.exists(os.environ["S3A_STATUS"]):
+    try:
+        status = json.load(open(os.environ["S3A_STATUS"]))
+    except Exception:
+        status = {}
+entries = []
+if os.path.exists(os.environ["S3A_MANIFEST"]):
+    for line in open(os.environ["S3A_MANIFEST"]):
+        try:
+            entries.append(json.loads(line))
+        except Exception:
+            pass
+running = os.environ["S3A_RUNNING"] == "1"
+state = status.get("state", "idle")
+if running and state != "uploading":
+    state = "uploading"
+if not running and state == "uploading":
+    state = "interrupted"
+out = {
+    "configured": os.environ["S3A_CONFIGURED"] == "1",
+    "storage_label": os.environ["S3A_LABEL"],
+    "state": state,
+    "running": running,
+    "detail": status.get("detail", ""),
+    "label": status.get("label", ""),
+    "path": status.get("path", ""),
+    "pct": status.get("pct"),
+    "bytes_done": status.get("bytes_done"),
+    "total_bytes_estimate": status.get("total_bytes_estimate"),
+    "updated_at": status.get("updated_at", ""),
+    "items": len(entries),
+    "bytes_archived": sum(e.get("bytes", 0) for e in entries),
+    "last_label": entries[-1].get("label", "") if entries else "",
+    "last_completed_at": entries[-1].get("completed_at", "") if entries else "",
+}
+if os.environ["S3A_JSON"] == "1":
+    print(json.dumps(out, indent=2))
+else:
+    if not out["configured"]:
+        print("Archive: not configured")
+    elif out["state"] == "uploading":
+        print(f"Archive: uploading {out['label']} - {out['detail']}")
+    else:
+        gb = out["bytes_archived"] / 1024**3
+        last = f", last {out['last_label']} on {out['last_completed_at'][:10]}" if out["items"] else ""
+        print(f"Archive: {out['state']}, {out['items']} item(s), {gb:.1f} GB{last}")
+PY
+}
+
+command_name="${1:-help}"
+[[ $# -gt 0 ]] && shift
+case "$command_name" in
+    add) cmd_add "$@" ;;
+    list) cmd_list "$@" ;;
+    snapshots) cmd_snapshots "$@" ;;
+    restore) cmd_restore "$@" ;;
+    status) cmd_status "$@" ;;
+    check-config) cmd_check_config ;;
+    help|-h|--help) usage ;;
+    *) echo "Unknown archive command: $command_name" >&2; usage >&2; exit 2 ;;
+esac
